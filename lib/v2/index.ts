@@ -32,9 +32,13 @@ import { history, project } from "./messages"
 import { analyzeContextTokens } from "../commands/context"
 import { buildStatsReport } from "../commands/stats"
 import {
+    createOutOfBandRuntime,
+    createOutOfBandTools,
+    isolateOutOfBandTools,
     notifyOverLimit as notifyOutOfBandOverLimit,
     removeDcpNotices,
-    runOutOfBandCompression,
+    runOutOfBandAgent,
+    type OutOfBandToolHost,
 } from "../compress/oob"
 import { rpc } from "./rpc"
 
@@ -71,6 +75,7 @@ export async function setup(ctx: Plugin.Context) {
     const queues = new Map<string, Promise<unknown>>()
     const limits = new Map<string, number>()
     const oobSessions = new Set<string>()
+    const oobRuntime = createOutOfBandRuntime()
 
     async function isOutOfBandSession(sessionID: string): Promise<boolean> {
         if (oobSessions.has(sessionID)) {
@@ -202,8 +207,9 @@ export async function setup(ctx: Plugin.Context) {
     })
     for (const kind of ["context", "compaction"] as const)
         await ctx.session.hook(kind, async (event) => {
-            if (await isOutOfBandSession(event.sessionID)) {
-                delete event.tools.compress
+            const outOfBand = await isOutOfBandSession(event.sessionID)
+            isolateOutOfBandTools(event.tools ?? {}, outOfBand)
+            if (outOfBand) {
                 return
             }
             return serial(event.sessionID, async () => {
@@ -276,13 +282,37 @@ export async function setup(ctx: Plugin.Context) {
             })
         })
 
-    if (config.compress.permission !== "deny") {
-        const define = (state: SessionState): ToolDefinition =>
-            (config.compress.mode === "message"
-                ? createCompressMessageTool
-                : createCompressRangeTool)({ client, state, logger, config, prompts })
-        const definition = define(createSessionState("compact"))
-        await ctx.tool.transform((editor) =>
+    const define = (state: SessionState): ToolDefinition =>
+        (config.compress.mode === "message" ? createCompressMessageTool : createCompressRangeTool)({
+            client,
+            state,
+            logger,
+            config,
+            prompts,
+        })
+    const oobHost: OutOfBandToolHost = {
+        config,
+        logger,
+        runtime: oobRuntime,
+        loadTarget: async (sessionID) => {
+            const loaded = await load(sessionID)
+            const params = getCurrentParams(loaded.state, loaded.messages, logger)
+            if (params.providerId && params.modelId) {
+                const limit = limits.get(`${params.providerId}/${params.modelId}`)
+                if (limit) {
+                    loaded.state.modelContextLimit = limit
+                }
+            }
+            return { state: loaded.state, messages: loaded.messages }
+        },
+        legacyFor: (state: SessionState) =>
+            createCompressRangeTool({ client, state, logger, config, prompts }) as any,
+    }
+    const oobToolDefinitions = createOutOfBandTools(oobHost)
+
+    await ctx.tool.transform((editor) => {
+        if (config.compress.permission !== "deny") {
+            const definition = define(createSessionState("compact"))
             editor.add({
                 name: "compress",
                 description: definition.description,
@@ -337,9 +367,20 @@ export async function setup(ctx: Plugin.Context) {
                         // public return type also permits unrelated attachment results.
                         return { content: content as string }
                     }),
-            }),
-        )
-    }
+            })
+        }
+        for (const entry of oobToolDefinitions) {
+            editor.add({
+                name: entry.name,
+                description: entry.definition.description,
+                input: tool.schema.object(entry.definition.args),
+                output: tool.schema.string(),
+                options: { codemode: false, permission: "dcp_oob" },
+                execute: (input, context) =>
+                    entry.definition.execute(input as any, context as any) as any,
+            })
+        }
+    })
     if (config.commands.enabled)
         await ctx.command.transform((editor) => {
             for (const name of ["dcp", "dcp-compress"])
@@ -383,27 +424,20 @@ export async function setup(ctx: Plugin.Context) {
                                             mode,
                                         })
                                     },
-                                    runOutOfBand: async ({ sessionID, focus, messages }) => {
-                                        const legacy = createCompressRangeTool({
-                                            client,
-                                            state,
-                                            logger,
-                                            config,
-                                            prompts,
-                                        }) as any
-                                        return runOutOfBandCompression({
+                                    runOutOfBand: async ({ sessionID, instruction, messages }) =>
+                                        runOutOfBandAgent({
                                             session: ctx.session as any,
-                                            client,
+                                            host: oobHost,
                                             state,
-                                            config,
-                                            logger,
-                                            sessionID,
                                             messages,
+                                            sessionID,
                                             directory: ctx.location.directory,
-                                            focus,
-                                            legacy,
-                                        })
-                                    },
+                                            instruction,
+                                            onChildSessionCreated: (childSessionID) =>
+                                                oobSessions.add(childSessionID),
+                                            onChildSessionRemoved: (childSessionID) =>
+                                                oobSessions.delete(childSessionID),
+                                        }),
                                 },
                             )(
                                 {
@@ -456,5 +490,7 @@ export async function setup(ctx: Plugin.Context) {
     return () => {
         sessions.clear()
         limits.clear()
+        oobRuntime.runs.clear()
+        oobSessions.clear()
     }
 }

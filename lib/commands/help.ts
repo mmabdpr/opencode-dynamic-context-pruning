@@ -27,8 +27,8 @@ const TUI_COMMANDS: [string, string][] = [
 
 const TOOL_COMMANDS: Record<string, [string, string]> = {
     compress: [
-        "/dcp-compress [--oob] [focus]",
-        "Trigger compression (--oob for oversized context)",
+        "/dcp-compress [--oob [instruction]]",
+        "Compress; --oob runs fresh autonomous worker rounds",
     ],
     decompress: ["/dcp decompress <n>", "Restore selected compression"],
     recompress: ["/dcp recompress <n>", "Re-apply a user-decompressed compression"],
@@ -57,7 +57,7 @@ export function formatHelpMessage(state: SessionState, config: PluginConfig): st
     lines.push("")
     lines.push("  Open the command palette for DCP modal commands.")
     lines.push(
-        "  Use /dcp-compress [--oob] [focus] to run compression; --oob uses a fresh child session.",
+        "  Use /dcp-compress [--oob [instruction]] to compress; --oob starts fresh autonomous worker rounds that follow your instruction.",
     )
     lines.push("")
     for (const [cmd, desc] of commands) {

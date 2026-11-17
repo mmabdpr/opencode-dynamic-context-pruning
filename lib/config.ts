@@ -743,7 +743,7 @@ const defaultConfig: PluginConfig = {
         protectUserMessages: false,
         outOfBand: "ask",
         outOfBandChunkTokens: 200000,
-        outOfBandMaxChunks: 10,
+        outOfBandMaxChunks: 40,
     },
     strategies: {
         deduplication: {

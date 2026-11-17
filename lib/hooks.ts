@@ -182,7 +182,7 @@ export interface CommandHost {
     }) => Promise<void>
     runOutOfBand?: (input: {
         sessionID: string
-        focus: string
+        instruction: string
         messages: WithParts[]
     }) => Promise<OutOfBandResult>
 }
@@ -266,7 +266,7 @@ export function createCommandExecuteHandler(
 
             if (subcommand === "compress") {
                 const parsed = parseOutOfBandFlag(subArgs.join(" "))
-                const userFocus = parsed.cleaned
+                const instruction = parsed.cleaned
                 const limit = host?.modelLimit ?? state.modelContextLimit ?? 0
                 let decision: "run" | "notify" | "normal" = "normal"
                 let live = 0
@@ -283,6 +283,13 @@ export function createCommandExecuteHandler(
                 }
 
                 if (decision === "notify") {
+                    output.parts.length = 0
+                    output.parts.push({
+                        type: "text",
+                        text: `${DCP_NOTICE_PREFIX}compression was not started.`,
+                        synthetic: true,
+                        ignored: true,
+                    })
                     await host?.notifyOverLimit?.({
                         sessionID: input.sessionID,
                         live,
@@ -315,13 +322,13 @@ export function createCommandExecuteHandler(
                     })
                     await host.runOutOfBand({
                         sessionID: input.sessionID,
-                        focus: userFocus,
+                        instruction,
                         messages,
                     })
                     return
                 }
 
-                const prompt = await handleManualTriggerCommand(commandCtx, "compress", userFocus)
+                const prompt = await handleManualTriggerCommand(commandCtx, "compress", instruction)
                 if (!prompt) {
                     throw new Error("__DCP_MANUAL_TRIGGER_BLOCKED__")
                 }

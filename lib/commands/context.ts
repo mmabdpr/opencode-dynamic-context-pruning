@@ -164,16 +164,16 @@ export function analyzeContextTokens(state: SessionState, messages: WithParts[])
                         toolOutputParts.push(outputStr)
                     }
                 }
-            } else if (
-                part.type === "text" &&
-                msg.info.role === "user" &&
-                !isCompacted &&
-                !isIgnoredUser
-            ) {
+            } else if (part.type === "text" && msg.info.role === "user" && !isIgnoredUser) {
                 const textPart = part as TextPart
                 const text = textPart.text || ""
-                userTextParts.push(text)
+                if (!isCompacted) {
+                    userTextParts.push(text)
+                }
                 if (!foundFirstUser) {
+                    // The first API request included this text even if the
+                    // message is compacted now. Keep it so the system estimate
+                    // does not absorb the whole first user message.
                     firstUserText += text
                 }
             }

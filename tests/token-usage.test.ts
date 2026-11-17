@@ -1,11 +1,12 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import type { PluginConfig } from "../lib/config"
+import { analyzeContextTokens } from "../lib/commands/context"
 import { isContextOverLimits } from "../lib/messages/inject/utils"
 import { wrapCompressedSummary } from "../lib/compress/state"
 import { createSessionState, type WithParts } from "../lib/state"
 import type { CompressionBlock } from "../lib/state"
-import { getCurrentTokenUsage } from "../lib/token-utils"
+import { countTokens, getCurrentTokenUsage } from "../lib/token-utils"
 
 function buildConfig(maxContextLimit: number, minContextLimit = 1): PluginConfig {
     return {
@@ -297,4 +298,93 @@ test("isContextOverLimits does not extend the max threshold when summaryBuffer i
     const overLimit = isContextOverLimits(config, state, undefined, undefined, messages)
 
     assert.equal(overLimit.overMaxLimit, true)
+})
+
+test("analyzeContextTokens subtracts a compacted first user from the system estimate", () => {
+    const firstUserText = repeatedWord("first", 100)
+    const messages: WithParts[] = [
+        {
+            info: {
+                id: "msg-first",
+                role: "user",
+                sessionID: "ses_context_tokens",
+                agent: "assistant",
+                time: { created: 1 },
+            } as WithParts["info"],
+            parts: [textPart("msg-first", "ses_context_tokens", "msg-first-part", firstUserText)],
+        },
+        {
+            info: {
+                id: "msg-first-assistant",
+                role: "assistant",
+                sessionID: "ses_context_tokens",
+                agent: "assistant",
+                time: { created: 2 },
+                tokens: {
+                    input: 5000,
+                    output: 100,
+                    reasoning: 0,
+                    cache: { read: 0, write: 0 },
+                },
+            } as WithParts["info"],
+            parts: [
+                textPart(
+                    "msg-first-assistant",
+                    "ses_context_tokens",
+                    "msg-first-assistant-part",
+                    "First reply",
+                ),
+            ],
+        },
+        {
+            info: {
+                id: "msg-second",
+                role: "user",
+                sessionID: "ses_context_tokens",
+                agent: "assistant",
+                time: { created: 3 },
+            } as WithParts["info"],
+            parts: [textPart("msg-second", "ses_context_tokens", "msg-second-part", "next")],
+        },
+        {
+            info: {
+                id: "msg-second-assistant",
+                role: "assistant",
+                sessionID: "ses_context_tokens",
+                agent: "assistant",
+                time: { created: 4 },
+                tokens: {
+                    input: 5100,
+                    output: 200,
+                    reasoning: 0,
+                    cache: { read: 0, write: 0 },
+                },
+            } as WithParts["info"],
+            parts: [
+                textPart(
+                    "msg-second-assistant",
+                    "ses_context_tokens",
+                    "msg-second-assistant-part",
+                    "Second reply",
+                ),
+            ],
+        },
+    ]
+
+    const state = createSessionState()
+    state.prune.messages.byMessageId.set("msg-first", {
+        tokenCount: countTokens(firstUserText),
+        allBlockIds: [1],
+        activeBlockIds: [1],
+    })
+    state.prune.messages.blocksById.set(
+        1,
+        createActiveBlock(1, wrapCompressedSummary(1, "compressed"), 10),
+    )
+    state.prune.messages.activeBlockIds.add(1)
+
+    const breakdown = analyzeContextTokens(state, messages)
+
+    assert.equal(breakdown.system, 5000 - countTokens(firstUserText))
+    assert.equal(breakdown.user, countTokens("next"))
 })
