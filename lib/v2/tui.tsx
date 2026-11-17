@@ -8,7 +8,6 @@ import { panelTheme } from "./theme"
 export async function setup(ctx: Plugin.Context) {
     const client = ctx.client.rpc(rpc)
     const options = () => ({ location: ctx.location ?? ctx.data.location.default() })
-    if (!(await client.status({}, options())).enabled) return
     const api: ViewApi = {
         renderer: ctx.renderer,
         theme: {
@@ -22,6 +21,8 @@ export async function setup(ctx: Plugin.Context) {
         ctx.ui.dialog.set({ size: "xlarge" })
         ctx.ui.dialog.show(render)
     }
+    // Do not probe RPC during setup: the server may still be registering the plugin,
+    // and OpenCode does not retry a failed TUI setup for the life of the process.
     async function open(page: "panel" | "context" | "stats" = "panel") {
         const route = ctx.ui.router.current()
         if (route.type !== "session") {
@@ -37,6 +38,18 @@ export async function setup(ctx: Plugin.Context) {
         }
         const sessionID = route.sessionID
         try {
+            const status = await client.status({}, options())
+            if (!status.enabled) {
+                show(() => (
+                    <StatusDialog
+                        api={api}
+                        title="DCP"
+                        eyebrow="Disabled"
+                        message="DCP is disabled in configuration."
+                    />
+                ))
+                return
+            }
             const data = await client.snapshot({ sessionID }, options())
             const back = () => {
                 void open()
