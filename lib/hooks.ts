@@ -36,6 +36,13 @@ import {
 } from "./commands"
 import { type HostPermissionSnapshot } from "./host-permissions"
 import { compressPermission, syncCompressPermissionState } from "./compress-permission"
+import {
+    liveContextTokens,
+    parseOutOfBandFlag,
+    resolveOutOfBandDecision,
+    type OutOfBandMode,
+    type OutOfBandResult,
+} from "./compress/oob"
 import { checkSession, ensureSessionInitialized, saveSessionState, syncToolCache } from "./state"
 import { cacheSystemPromptTokens } from "./ui/utils"
 
@@ -164,6 +171,21 @@ export function createChatMessageTransformHandler(
     }
 }
 
+export interface CommandHost {
+    modelLimit?: number
+    notifyOverLimit?: (input: {
+        sessionID: string
+        live: number
+        limit: number
+        mode: OutOfBandMode
+    }) => Promise<void>
+    runOutOfBand?: (input: {
+        sessionID: string
+        focus: string
+        messages: WithParts[]
+    }) => Promise<OutOfBandResult>
+}
+
 export function createCommandExecuteHandler(
     client: any,
     state: SessionState,
@@ -171,6 +193,7 @@ export function createCommandExecuteHandler(
     config: PluginConfig,
     workingDirectory: string,
     hostPermissions: HostPermissionSnapshot,
+    host?: CommandHost,
 ) {
     return async (
         input: { command: string; sessionID: string; arguments: string },
@@ -241,7 +264,55 @@ export function createCommandExecuteHandler(
             }
 
             if (subcommand === "compress") {
-                const userFocus = subArgs.join(" ").trim()
+                const parsed = parseOutOfBandFlag(subArgs.join(" "))
+                const userFocus = parsed.cleaned
+                const limit = host?.modelLimit ?? state.modelContextLimit ?? 0
+                let decision: "run" | "notify" | "normal" = "normal"
+                let live = 0
+
+                if (limit > 0) {
+                    live = liveContextTokens(state, messages)
+                    decision = resolveOutOfBandDecision({
+                        requested: parsed.requested,
+                        mode: config.compress.outOfBand,
+                        overLimit: live > Math.floor(limit * 0.9),
+                    })
+                } else if (parsed.requested || config.compress.outOfBand === "always") {
+                    decision = "run"
+                }
+
+                if (decision === "notify") {
+                    await host?.notifyOverLimit?.({
+                        sessionID: input.sessionID,
+                        live,
+                        limit,
+                        mode: config.compress.outOfBand,
+                    })
+                    return
+                }
+
+                if (decision === "run") {
+                    if (effectivePermission !== "allow") {
+                        throw new Error(
+                            'DCP: out-of-band compression requires compress permission "allow"',
+                        )
+                    }
+                    if (config.compress.mode !== "range") {
+                        throw new Error(
+                            'Out-of-band compression currently requires compress.mode = "range"',
+                        )
+                    }
+                    if (!host?.runOutOfBand) {
+                        throw new Error("Out-of-band compression is not available")
+                    }
+                    await host.runOutOfBand({
+                        sessionID: input.sessionID,
+                        focus: userFocus,
+                        messages,
+                    })
+                    return
+                }
+
                 const prompt = await handleManualTriggerCommand(commandCtx, "compress", userFocus)
                 if (!prompt) {
                     throw new Error("__DCP_MANUAL_TRIGGER_BLOCKED__")

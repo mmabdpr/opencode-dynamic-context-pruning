@@ -37,6 +37,10 @@ export interface CompressConfig {
     protectedTools: string[]
     protectTags: boolean
     protectUserMessages: boolean
+    outOfBand: "off" | "ask" | "allow" | "always"
+    outOfBandChunkTokens: number
+    outOfBandMaxChunks: number
+    outOfBandAgent?: string
 }
 
 export interface Commands {
@@ -136,6 +140,10 @@ export const VALID_CONFIG_KEYS = new Set([
     "compress.protectedTools",
     "compress.protectTags",
     "compress.protectUserMessages",
+    "compress.outOfBand",
+    "compress.outOfBandChunkTokens",
+    "compress.outOfBandMaxChunks",
+    "compress.outOfBandAgent",
     "strategies",
     "strategies.deduplication",
     "strategies.deduplication.enabled",
@@ -532,6 +540,40 @@ export function validateConfigTypes(config: Record<string, any>): ValidationErro
                 })
             }
 
+            const validOutOfBand = ["off", "ask", "allow", "always"]
+            if (compress.outOfBand !== undefined && !validOutOfBand.includes(compress.outOfBand)) {
+                errors.push({
+                    key: "compress.outOfBand",
+                    expected: '"off" | "ask" | "allow" | "always"',
+                    actual: JSON.stringify(compress.outOfBand),
+                })
+            }
+
+            for (const key of ["outOfBandChunkTokens", "outOfBandMaxChunks"] as const) {
+                const value = compress[key]
+                if (
+                    value !== undefined &&
+                    (typeof value !== "number" || !Number.isInteger(value) || value <= 0)
+                ) {
+                    errors.push({
+                        key: `compress.${key}`,
+                        expected: "positive integer",
+                        actual: JSON.stringify(value),
+                    })
+                }
+            }
+
+            if (
+                compress.outOfBandAgent !== undefined &&
+                typeof compress.outOfBandAgent !== "string"
+            ) {
+                errors.push({
+                    key: "compress.outOfBandAgent",
+                    expected: "string",
+                    actual: typeof compress.outOfBandAgent,
+                })
+            }
+
             if (
                 compress.showCompression !== undefined &&
                 typeof compress.showCompression !== "boolean"
@@ -699,6 +741,9 @@ const defaultConfig: PluginConfig = {
         protectedTools: [...COMPRESS_DEFAULT_PROTECTED_TOOLS],
         protectTags: false,
         protectUserMessages: false,
+        outOfBand: "ask",
+        outOfBandChunkTokens: 200000,
+        outOfBandMaxChunks: 10,
     },
     strategies: {
         deduplication: {
@@ -865,6 +910,10 @@ function mergeCompress(
         protectedTools: [...new Set([...base.protectedTools, ...(override.protectedTools ?? [])])],
         protectTags: override.protectTags ?? base.protectTags,
         protectUserMessages: override.protectUserMessages ?? base.protectUserMessages,
+        outOfBand: override.outOfBand ?? base.outOfBand,
+        outOfBandChunkTokens: override.outOfBandChunkTokens ?? base.outOfBandChunkTokens,
+        outOfBandMaxChunks: override.outOfBandMaxChunks ?? base.outOfBandMaxChunks,
+        outOfBandAgent: override.outOfBandAgent ?? base.outOfBandAgent,
     }
 }
 

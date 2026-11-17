@@ -26,11 +26,15 @@ import {
     stripHallucinations,
     syncCompressionBlocks,
 } from "../messages"
-import { countTokens } from "../token-utils"
+import { countTokens, getCurrentParams } from "../token-utils"
 import { matchesGlob } from "../protected-patterns"
 import { history, project } from "./messages"
 import { analyzeContextTokens } from "../commands/context"
 import { buildStatsReport } from "../commands/stats"
+import {
+    notifyOverLimit as notifyOutOfBandOverLimit,
+    runOutOfBandCompression,
+} from "../compress/oob"
 import { rpc } from "./rpc"
 
 // Extension point for future model-invisible V2 reports. Never use synthetic()
@@ -65,6 +69,23 @@ export async function setup(ctx: Plugin.Context) {
     const sessions = new Map<string, SessionState>()
     const queues = new Map<string, Promise<unknown>>()
     const limits = new Map<string, number>()
+    const oobSessions = new Set<string>()
+
+    async function isOutOfBandSession(sessionID: string): Promise<boolean> {
+        if (oobSessions.has(sessionID)) {
+            return true
+        }
+        try {
+            const session = await ctx.session.get({ sessionID })
+            if ((session?.metadata as Record<string, unknown> | undefined)?.dcpOob === true) {
+                oobSessions.add(sessionID)
+                return true
+            }
+        } catch {
+            // If the lookup fails, fall through to normal handling.
+        }
+        return false
+    }
     const aliases: Record<string, string> = {
         task: "subagent",
         bash: "shell",
@@ -179,8 +200,12 @@ export async function setup(ctx: Plugin.Context) {
             limits.set(`${model.providerID}/${model.id}`, model.limit.context)
     })
     for (const kind of ["context", "compaction"] as const)
-        await ctx.session.hook(kind, (event) =>
-            serial(event.sessionID, async () => {
+        await ctx.session.hook(kind, async (event) => {
+            if (await isOutOfBandSession(event.sessionID)) {
+                delete event.tools.compress
+                return
+            }
+            return serial(event.sessionID, async () => {
                 const { state, entries, session, messages } = await load(
                     event.sessionID,
                     event.agent,
@@ -246,8 +271,8 @@ export async function setup(ctx: Plugin.Context) {
                     text,
                 }))
                 await logger.saveContext(event.sessionID, view.messages)
-            }),
-        )
+            })
+        })
 
     if (config.compress.permission !== "deny") {
         const define = (state: SessionState): ToolDefinition =>
@@ -321,7 +346,14 @@ export async function setup(ctx: Plugin.Context) {
                     description: name === "dcp" ? "DCP commands" : "Trigger DCP manual compression",
                     execute: async (invocation) => {
                         const prompt = await serial(invocation.sessionID, async () => {
-                            const { state } = await load(invocation.sessionID)
+                            const { state, messages } = await load(invocation.sessionID)
+                            const params = getCurrentParams(state, messages, logger)
+                            if (params.providerId && params.modelId) {
+                                const limit = limits.get(`${params.providerId}/${params.modelId}`)
+                                if (limit) {
+                                    state.modelContextLimit = limit
+                                }
+                            }
                             const permission =
                                 state.compressPermission ?? config.compress.permission
                             if (
@@ -337,6 +369,40 @@ export async function setup(ctx: Plugin.Context) {
                                 config,
                                 ctx.location.directory,
                                 { global: { compress: permission }, agents: {} },
+                                {
+                                    modelLimit: state.modelContextLimit,
+                                    notifyOverLimit: async ({ sessionID, live, limit, mode }) => {
+                                        await notifyOutOfBandOverLimit({
+                                            session: ctx.session as any,
+                                            sessionID,
+                                            logger,
+                                            live,
+                                            limit,
+                                            mode,
+                                        })
+                                    },
+                                    runOutOfBand: async ({ sessionID, focus, messages }) => {
+                                        const legacy = createCompressRangeTool({
+                                            client,
+                                            state,
+                                            logger,
+                                            config,
+                                            prompts,
+                                        }) as any
+                                        return runOutOfBandCompression({
+                                            session: ctx.session as any,
+                                            client,
+                                            state,
+                                            config,
+                                            logger,
+                                            sessionID,
+                                            messages,
+                                            directory: ctx.location.directory,
+                                            focus,
+                                            legacy,
+                                        })
+                                    },
+                                },
                             )(
                                 {
                                     command: name,

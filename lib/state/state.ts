@@ -1,7 +1,13 @@
 import type { SessionState, ToolParameterEntry, WithParts } from "./types"
 import type { Logger } from "../logger"
 import { applyPendingCompressionDurations } from "../compress/timing"
-import { loadManualModeSetting, loadSessionState, saveSessionState } from "./persistence"
+import {
+    loadManualModeSetting,
+    loadSessionState,
+    saveSessionState,
+    type PersistedSessionState,
+} from "./persistence"
+import { migrateForkStateForSession } from "./fork-migration"
 import {
     isSubAgentSession,
     findLastCompactionTimestamp,
@@ -164,11 +170,38 @@ export async function ensureSessionInitialized(
     state.currentTurn = countTurns(state, messages)
     state.nudges.turnNudgeAnchors = collectTurnNudgeAnchors(messages)
 
-    const persisted = await loadSessionState(sessionId, logger)
+    let persisted = await loadSessionState(sessionId, logger)
+    let migrated = false
+
+    if ((persisted === null || isEmptyPersistedState(persisted)) && !state.isSubAgent) {
+        const forkState = await migrateForkStateForSession(client, sessionId, messages, logger)
+        if (forkState) {
+            persisted = forkState
+            migrated = true
+        }
+    }
+
     if (persisted === null) {
         return
     }
 
+    applyPersistedState(state, persisted)
+
+    const applied = applyPendingCompressionDurations(state)
+    if (applied > 0 || migrated) {
+        await saveSessionState(state, logger)
+    }
+}
+
+function isEmptyPersistedState(persisted: PersistedSessionState): boolean {
+    return (
+        Object.keys(persisted.prune?.messages?.byMessageId ?? {}).length === 0 &&
+        Object.keys(persisted.prune?.messages?.blocksById ?? {}).length === 0 &&
+        Object.keys(persisted.prune?.tools ?? {}).length === 0
+    )
+}
+
+function applyPersistedState(state: SessionState, persisted: PersistedSessionState): void {
     if (typeof persisted.manualMode === "boolean") {
         state.manualMode = persisted.manualMode ? "active" : false
     }
@@ -186,11 +219,6 @@ export async function ensureSessionInitialized(
     state.stats = {
         pruneTokenCounter: persisted.stats?.pruneTokenCounter || 0,
         totalPruneTokens: persisted.stats?.totalPruneTokens || 0,
-    }
-
-    const applied = applyPendingCompressionDurations(state)
-    if (applied > 0) {
-        await saveSessionState(state, logger)
     }
 }
 
