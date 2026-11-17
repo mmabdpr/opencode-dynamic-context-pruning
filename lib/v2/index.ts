@@ -33,6 +33,7 @@ import { analyzeContextTokens } from "../commands/context"
 import { buildStatsReport } from "../commands/stats"
 import {
     notifyOverLimit as notifyOutOfBandOverLimit,
+    removeDcpNotices,
     runOutOfBandCompression,
 } from "../compress/oob"
 import { rpc } from "./rpc"
@@ -224,6 +225,7 @@ export async function setup(ctx: Plugin.Context) {
                     agent: event.agent,
                     model: event.model,
                 })
+                removeDcpNotices(view.messages)
                 stripHallucinations(view.messages, state.idFormat)
                 assignMessageRefs(state, view.messages)
                 // Compaction may select only a prefix; block origins can be in the retained tail.

@@ -37,6 +37,7 @@ import {
 import { type HostPermissionSnapshot } from "./host-permissions"
 import { compressPermission, syncCompressPermissionState } from "./compress-permission"
 import {
+    DCP_NOTICE_PREFIX,
     liveContextTokens,
     parseOutOfBandFlag,
     resolveOutOfBandDecision,
@@ -305,6 +306,13 @@ export function createCommandExecuteHandler(
                     if (!host?.runOutOfBand) {
                         throw new Error("Out-of-band compression is not available")
                     }
+                    output.parts.length = 0
+                    output.parts.push({
+                        type: "text",
+                        text: `${DCP_NOTICE_PREFIX}out-of-band compression is running.`,
+                        synthetic: true,
+                        ignored: true,
+                    })
                     await host.runOutOfBand({
                         sessionID: input.sessionID,
                         focus: userFocus,

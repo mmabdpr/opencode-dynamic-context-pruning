@@ -1,14 +1,20 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import { existsSync, unlinkSync } from "node:fs"
+import { homedir } from "node:os"
+import { join } from "node:path"
 import {
     buildOutOfBandPrompt,
     buildTranscript,
     extractAssistantText,
+    isDcpNoticeMessage,
     liveContextTokens,
     parseOutOfBandFlag,
+    removeDcpNotices,
     resolveContextTarget,
     resolveOutOfBandDecision,
     runOutOfBandCompression,
+    selectOutOfBandBlock,
     selectOutOfBandRange,
 } from "../lib/compress/oob"
 import { createCommandExecuteHandler } from "../lib/hooks"
@@ -120,8 +126,66 @@ test("resolves the out-of-band decision for each mode", () => {
 
 test("resolves numeric and percentage targets against the model limit", () => {
     assert.equal(resolveContextTarget(config({ maxContextLimit: 160000 }), 1000000), 160000)
+    assert.equal(
+        resolveContextTarget(config({ maxContextLimit: 160000, minContextLimit: 100000 }), 1000000),
+        100000,
+    )
     assert.equal(resolveContextTarget(config({ maxContextLimit: "10%" }), 1000000), 100000)
     assert.equal(resolveContextTarget(config({ maxContextLimit: "200%" }), 1000000), 1000000)
+})
+
+test("recognizes DCP internal notices but not ordinary messages", () => {
+    assert.equal(isDcpNoticeMessage(message("m1", "user", 1, "DCP internal notice: hello")), true)
+    assert.equal(isDcpNoticeMessage(message("m2", "user", 2, "hello")), false)
+})
+
+test("removes DCP notices before messages reach the model", () => {
+    const messages = [
+        message("m1", "user", 1, "DCP internal notice: started"),
+        message("m2", "user", 2, "real user text"),
+        message("m3", "user", 3, "DCP internal notice: finished"),
+    ]
+    assert.equal(removeDcpNotices(messages), 2)
+    assert.deepEqual(
+        messages.map((item) => item.info.id),
+        ["m2"],
+    )
+})
+
+test("selects the largest active block for recompression", () => {
+    const state = createSessionState()
+    const base = {
+        runId: 1,
+        active: true,
+        deactivatedByUser: false,
+        compressedTokens: 1000,
+        durationMs: 1,
+        topic: "t",
+        startId: "@1@",
+        endId: "@1@",
+        anchorMessageId: "m1",
+        compressMessageId: "m1",
+        includedBlockIds: [],
+        consumedBlockIds: [],
+        parentBlockIds: [],
+        directMessageIds: [],
+        directToolIds: [],
+        effectiveMessageIds: ["m1"],
+        effectiveToolIds: [],
+        createdAt: 1,
+        summary: "summary",
+    }
+    state.prune.messages.blocksById.set(1, { ...base, blockId: 1, summaryTokens: 20000 } as any)
+    state.prune.messages.blocksById.set(2, { ...base, blockId: 2, summaryTokens: 40000 } as any)
+    state.prune.messages.blocksById.set(3, {
+        ...base,
+        blockId: 3,
+        summaryTokens: 50000,
+        active: false,
+    } as any)
+
+    assert.equal(selectOutOfBandBlock(state)?.blockId, 2)
+    assert.equal(selectOutOfBandBlock(state, new Set([2]))?.blockId, 1)
 })
 
 test("selects the oldest uncompressed range and skips compacted messages", () => {
@@ -218,8 +282,8 @@ test("runs one out-of-band chunk through a fresh child session and applies its s
     state.sessionId = "ses_target"
     state.modelContextLimit = 1_000_000
     const messages = [
-        message("m1", "user", 1, "first"),
-        message("m2", "assistant", 2, "second"),
+        message("m1", "user", 1, "first ".repeat(800)),
+        message("m2", "assistant", 2, "second ".repeat(800)),
         message("m3", "user", 3, "current"),
     ]
     const notices: string[] = []
@@ -271,7 +335,7 @@ test("runs one out-of-band chunk through a fresh child session and applies its s
                 runId: 1,
                 active: true,
                 deactivatedByUser: false,
-                compressedTokens: 4000,
+                compressedTokens: 500,
                 summaryTokens: 100,
                 durationMs: 1,
                 topic: args.topic,
@@ -332,8 +396,8 @@ test("restores manual mode when an out-of-band chunk fails", async () => {
     state.manualMode = "active"
     state.modelContextLimit = 1_000_000
     const messages = [
-        message("m1", "user", 1, "first"),
-        message("m2", "assistant", 2, "second"),
+        message("m1", "user", 1, "first ".repeat(800)),
+        message("m2", "assistant", 2, "second ".repeat(800)),
         message("m3", "user", 3, "third"),
     ]
     const session = {
@@ -474,15 +538,19 @@ test("command host runs out-of-band when over the limit and allowed", async () =
         },
     )
 
+    const output = { parts: [] as any[] }
     await handler(
         { command: "dcp-compress", sessionID: "session-oob-allow", arguments: "auth work" },
-        { parts: [] },
+        output,
     )
 
     assert.equal(calls.notified, 0)
     assert.equal(calls.ran, 1)
     assert.equal(calls.focus, "auth work")
     assert.equal(state.pendingManualTrigger, null)
+    assert.equal(output.parts.length, 1)
+    assert.equal(output.parts[0].ignored, true)
+    assert.equal(output.parts[0].synthetic, true)
 })
 
 test("command host keeps the normal prompt when under the limit", async () => {
@@ -517,4 +585,109 @@ test("command host keeps the normal prompt when under the limit", async () => {
     assert.equal(calls.ran, 0)
     assert.ok(state.pendingManualTrigger)
     assert.equal(output.parts.length, 1)
+})
+
+test("recompresses an active summary block when it dominates the context", async () => {
+    const sessionID = `ses_oob_block_${Date.now()}`
+    const state = createSessionState()
+    state.sessionId = sessionID
+    state.modelContextLimit = 1_000_000
+    const messages = [
+        message("m1", "user", 1, "first"),
+        message("m2", "assistant", 2, "second"),
+        message("m3", "user", 3, "current"),
+    ]
+    state.prune.messages.blocksById.set(1, {
+        blockId: 1,
+        runId: 1,
+        active: true,
+        deactivatedByUser: false,
+        compressedTokens: 1000,
+        summaryTokens: 20000,
+        durationMs: 1,
+        topic: "old block",
+        startId: "@1@",
+        endId: "@2@",
+        anchorMessageId: "m1",
+        compressMessageId: "m2",
+        includedBlockIds: [],
+        consumedBlockIds: [],
+        parentBlockIds: [],
+        directMessageIds: ["m1", "m2"],
+        directToolIds: [],
+        effectiveMessageIds: ["m1", "m2"],
+        effectiveToolIds: [],
+        createdAt: 1,
+        summary: "old summary",
+    } as any)
+    state.prune.messages.activeBlockIds.add(1)
+    state.prune.messages.activeByAnchorMessageId.set("m1", 1)
+    state.prune.messages.nextBlockId = 2
+    state.prune.messages.byMessageId.set("m1", {
+        tokenCount: 1000,
+        allBlockIds: [1],
+        activeBlockIds: [1],
+    })
+    state.prune.messages.byMessageId.set("m2", {
+        tokenCount: 1000,
+        allBlockIds: [1],
+        activeBlockIds: [1],
+    })
+
+    const notices: string[] = []
+    const session = {
+        async create() {
+            return { id: "child" }
+        },
+        async prompt() {},
+        async wait() {},
+        async context() {
+            return [
+                {
+                    type: "assistant",
+                    id: "c1",
+                    agent: "build",
+                    model: { providerID: "provider", id: "model" },
+                    time: { created: 1 },
+                    tokens: { input: 10, output: 2, reasoning: 0, cache: { read: 0, write: 0 } },
+                    content: [{ type: "text", text: "short summary" }],
+                },
+            ]
+        },
+        async get() {
+            return { id: "child", agent: "build", model: { providerID: "provider", id: "model" } }
+        },
+        async synthetic(input: any) {
+            notices.push(input.text)
+        },
+        async remove() {},
+    }
+
+    const result = await runOutOfBandCompression({
+        session: session as any,
+        client: {} as any,
+        state,
+        config: config({ maxContextLimit: 1 }),
+        logger: logger(),
+        sessionID,
+        messages,
+        directory: "/tmp/project",
+        legacy: { execute: async () => "" },
+    })
+
+    assert.equal(result.chunks, 1)
+    assert.equal(result.stopped, "target")
+    assert.equal(state.prune.messages.blocksById.get(1)?.active, false)
+    const newer = [...state.prune.messages.blocksById.values()].find((block) => block.blockId !== 1)
+    assert.ok(newer)
+    assert.equal(newer?.active, true)
+    assert.match(newer?.summary ?? "", /short summary/)
+    assert.ok(state.prune.messages.byMessageId.get("m1")?.activeBlockIds.includes(newer!.blockId))
+    assert.ok(notices.every((text) => text.startsWith("DCP internal notice: ")))
+
+    const dataHome = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share")
+    const statePath = join(dataHome, "opencode", "storage", "plugin", "dcp", `${sessionID}.json`)
+    if (existsSync(statePath)) {
+        unlinkSync(statePath)
+    }
 })

@@ -168,10 +168,13 @@ Each level overrides the previous, so project settings take priority over global
         // "always" uses out-of-band compression for every compress command;
         // "off" disables automatic out-of-band compression and blocks an
         // over-limit compress unless `--oob` is passed explicitly.
+        // The target is compress.minContextLimit when set, else maxContextLimit.
         "outOfBand": "ask",
         // Token budget per out-of-band chunk; capped by the model limit.
         "outOfBandChunkTokens": 200000,
         // Maximum chunks per out-of-band run; rerun the command to continue.
+        // Large existing block summaries are recompressed when they dominate
+        // the remaining excess.
         "outOfBandMaxChunks": 10,
         // Optional agent for the fresh out-of-band compression session.
         // Defaults to the session's current agent.
@@ -205,7 +208,7 @@ DCP provides a TUI panel and one prompt-producing slash command:
 
 - `/dcp` — Opens the DCP panel with context, stats, and manual-mode controls.
 - `/dcp-compress [focus]` — Asks the model to run one compression pass. Optional focus text directs what content to compress, following the active `compress.mode`.
-- `/dcp-compress --oob [focus]` — Compresses the oldest uncompressed ranges in fresh out-of-band sessions, so the target session's oversized context is never sent to the model. `--out-of-band` is an alias.
+- `/dcp-compress --oob [focus]` — Compresses the oldest uncompressed ranges, then oversized block summaries, in fresh out-of-band sessions, so the target session's oversized context is never sent to the model. `--out-of-band` is an alias.
 
 Forked sessions inherit the parent's compression state when the fork boundary maps cleanly, so a fork does not reload the parent's full uncompressed history.
 

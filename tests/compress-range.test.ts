@@ -383,3 +383,62 @@ test("compress range mode rejects overlapping batched ranges", async () => {
 
     assert.equal(state.prune.messages.blocksById.size, 0)
 })
+
+test("compress range rejects a summary larger than the content it replaces", async () => {
+    const sessionID = `ses_range_summary_guard_${Date.now()}`
+    const rawMessages = buildMessages(sessionID)
+    rawMessages[0]!.parts[0] = textPart(
+        "msg-subagent-prompt",
+        sessionID,
+        "part-1",
+        "word ".repeat(2000),
+    )
+    rawMessages[1]!.parts[0] = textPart(
+        "msg-assistant-1",
+        sessionID,
+        "part-2",
+        "word ".repeat(2000),
+    )
+    const state = createSessionState()
+    const logger = new Logger(false)
+    const tool = createCompressRangeTool({
+        client: {
+            session: {
+                messages: async () => ({ data: rawMessages }),
+                get: async () => ({ data: { parentID: "ses_parent" } }),
+            },
+        },
+        state,
+        logger,
+        config: buildConfig(),
+        prompts: {
+            reload() {},
+            getRuntimePrompts() {
+                return { compressRange: "", compressMessage: "" }
+            },
+        },
+    } as any)
+
+    await assert.rejects(
+        tool.execute(
+            {
+                topic: "Oversized summary",
+                content: [
+                    {
+                        startId: "m0001",
+                        endId: "m0002",
+                        summary: "word ".repeat(10000),
+                    },
+                ],
+            },
+            {
+                ask: async () => {},
+                metadata: () => {},
+                sessionID,
+                messageID: "msg-compress-summary-guard",
+            },
+        ),
+        /summary is too large/,
+    )
+    assert.equal(state.prune.messages.blocksById.size, 0)
+})

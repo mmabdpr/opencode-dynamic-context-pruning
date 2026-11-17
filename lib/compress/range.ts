@@ -154,6 +154,29 @@ export function createCompressRangeTool(ctx: ToolContext): ReturnType<typeof too
                 })
             }
 
+            for (const preparedPlan of preparedPlans) {
+                const selectedTokens = [...preparedPlan.selection.messageTokenById.values()].reduce(
+                    (sum, value) => sum + value,
+                    0,
+                )
+                const blockTokens = preparedPlan.selection.requiredBlockIds.reduce(
+                    (sum, blockId) =>
+                        sum + (searchContext.summaryByBlockId.get(blockId)?.summaryTokens ?? 0),
+                    0,
+                )
+                const inputTokens = selectedTokens + blockTokens
+                if (inputTokens >= 1000) {
+                    const summaryTokens = countTokens(
+                        wrapCompressedSummary(1, preparedPlan.finalSummary, ctx.state.idFormat),
+                    )
+                    if (summaryTokens >= inputTokens) {
+                        throw new Error(
+                            `Compressed summary is too large: ${summaryTokens} tokens for ${inputTokens} tokens of content. Provide a shorter summary.`,
+                        )
+                    }
+                }
+            }
+
             const runId = allocateRunId(ctx.state)
 
             for (const preparedPlan of preparedPlans) {
