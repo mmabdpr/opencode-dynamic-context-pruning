@@ -577,7 +577,7 @@ test("runs an autonomous child that reads, decides, writes, and reports", async 
     state.manualMode = "active"
     const createdInputs: any[] = []
     const prompts: any[] = []
-    const notices: string[] = []
+    const notices: any[] = []
     const removals: any[] = []
     const createdMarks: string[] = []
     const childID = "child-orchestrator"
@@ -618,7 +618,7 @@ test("runs an autonomous child that reads, decides, writes, and reports", async 
             return { id: childID, agent: "build", model: { providerID: "provider", id: "model" } }
         },
         async synthetic(input: any) {
-            notices.push(input.text)
+            notices.push(input)
         },
         async interrupt() {},
         async remove(input: any) {
@@ -642,6 +642,7 @@ test("runs an autonomous child that reads, decides, writes, and reports", async 
     assert.equal(createdInputs[0].metadata.dcpOob, true)
     assert.equal(createdInputs[0].metadata.dcpOobTarget, harness.target.sessionID)
     assert.equal(createdInputs[0].metadata.dcpOobRunId, result.runId)
+    assert.equal(createdInputs[0].parentID, undefined)
     assert.equal(createdInputs[0].agent, "build")
     assert.equal(createdInputs[0].model.id, "model")
     assert.deepEqual(createdInputs[0].location, { directory: "/tmp/project" })
@@ -664,11 +665,12 @@ test("runs an autonomous child that reads, decides, writes, and reports", async 
     assert.equal(removals.length, 1)
     assert.equal(removals[0].sessionID, childID)
     assert.equal(notices.length, 1)
-    assert.ok(notices[0].startsWith("DCP internal notice: "))
-    assert.match(notices[0], /projected context ~[\d,]+ -> ~[\d,]+ tokens/)
-    assert.match(notices[0], /Final worker report:\nCompressed one auth range/)
-    assert.match(notices[0], /1 round/)
-    assert.doesNotMatch(notices[0], /target reached/i)
+    assert.equal(notices[0].resume, false)
+    assert.ok(notices[0].text.startsWith("DCP internal notice: "))
+    assert.match(notices[0].text, /projected context ~[\d,]+ -> ~[\d,]+ tokens/)
+    assert.match(notices[0].text, /Final worker report:\nCompressed one auth range/)
+    assert.match(notices[0].text, /1 round/)
+    assert.doesNotMatch(notices[0].text, /target reached/i)
 })
 
 test("starts a fresh worker round when the previous worker reports CONTINUE", async () => {

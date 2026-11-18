@@ -44,6 +44,7 @@ import {
     runOutOfBandAgent,
     type OutOfBandToolHost,
 } from "../compress/oob"
+import { createOobGate, isCompressionCommand } from "../compress/oob-guard"
 import { rpc } from "./rpc"
 import { getPluginIdentity } from "../plugin-identity"
 
@@ -79,6 +80,7 @@ export async function setup(ctx: Plugin.Context) {
     const sessions = new Map<string, SessionState>()
     const queues = new Map<string, Promise<unknown>>()
     const limits = new Map<string, number>()
+    const compressionGate = createOobGate()
     const oobSessions = new Set<string>()
     const activeContextIds = new Map<string, Set<string>>()
     const fullContext = new Map<string, WithParts[]>()
@@ -458,6 +460,18 @@ export async function setup(ctx: Plugin.Context) {
                     description: name === "dcp" ? "DCP commands" : "Trigger DCP manual compression",
                     execute: async (invocation) => {
                         try {
+                            if (
+                                isCompressionCommand(name, invocation.prompt.text) &&
+                                compressionGate.isOob(invocation.sessionID)
+                            ) {
+                                await ctx.session.synthetic({
+                                    sessionID: invocation.sessionID,
+                                    text: `${DCP_NOTICE_PREFIX}compression request ignored: an out-of-band compression is already running for this session.`,
+                                    description: "DCP command output",
+                                    resume: false,
+                                })
+                                return
+                            }
                             const prompt = await serial(invocation.sessionID, async () => {
                                 const { state, messages } = await load(invocation.sessionID)
                                 const params = getCurrentParams(state, messages, logger)
@@ -506,26 +520,55 @@ export async function setup(ctx: Plugin.Context) {
                                                 sessionID,
                                                 text: `${DCP_NOTICE_PREFIX}\n${text}`,
                                                 description: "DCP command output",
+                                                resume: false,
                                             })
                                         },
                                         runOutOfBand: async ({
                                             sessionID,
                                             instruction,
                                             messages,
-                                        }) =>
-                                            runOutOfBandAgent({
-                                                session: ctx.session as any,
-                                                host: oobHost,
-                                                state,
-                                                messages,
+                                        }) => {
+                                            const entry = compressionGate.enterOob(
                                                 sessionID,
-                                                directory: ctx.location.directory,
                                                 instruction,
-                                                onChildSessionCreated: (childSessionID) =>
-                                                    oobSessions.add(childSessionID),
-                                                onChildSessionRemoved: (childSessionID) =>
-                                                    oobSessions.delete(childSessionID),
-                                            }),
+                                            )
+                                            if (!entry.ok) {
+                                                const message =
+                                                    entry.reason === "active"
+                                                        ? `${DCP_NOTICE_PREFIX}compression request ignored: an out-of-band compression is already running for this session.`
+                                                        : `${DCP_NOTICE_PREFIX}compression request ignored: an identical out-of-band compression completed recently; retry in ${Math.max(1, Math.ceil(entry.retryAfterMs / 1000))}s.`
+                                                await ctx.session.synthetic({
+                                                    sessionID,
+                                                    text: message,
+                                                    description: "DCP command output",
+                                                    resume: false,
+                                                })
+                                                return
+                                            }
+                                            let completed = false
+                                            try {
+                                                const result = await runOutOfBandAgent({
+                                                    session: ctx.session as any,
+                                                    host: oobHost,
+                                                    state,
+                                                    messages,
+                                                    sessionID,
+                                                    directory: ctx.location.directory,
+                                                    instruction,
+                                                    onChildSessionCreated: (childSessionID) =>
+                                                        oobSessions.add(childSessionID),
+                                                    onChildSessionRemoved: (childSessionID) =>
+                                                        oobSessions.delete(childSessionID),
+                                                })
+                                                completed = !(
+                                                    result.stopped === "failed" &&
+                                                    result.chunks === 0
+                                                )
+                                                return result
+                                            } finally {
+                                                entry.release(completed)
+                                            }
+                                        },
                                     },
                                 )(
                                     {
@@ -560,6 +603,7 @@ export async function setup(ctx: Plugin.Context) {
                                     sessionID: invocation.sessionID,
                                     text: `DCP internal notice: DCP command failed: ${message}`,
                                     description: "DCP command error",
+                                    resume: false,
                                 })
                             } catch (sendError: any) {
                                 logger.error("Failed to report DCP command error", {
@@ -599,6 +643,7 @@ export async function setup(ctx: Plugin.Context) {
         limits.clear()
         fullContext.clear()
         partialContextWarned.clear()
+        compressionGate.clear()
         oobRuntime.runs.clear()
         oobSessions.clear()
     }

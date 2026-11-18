@@ -28,7 +28,7 @@ const TUI_COMMANDS: [string, string][] = [
 const TOOL_COMMANDS: Record<string, [string, string]> = {
     compress: [
         "/dcp-compress [--oob [instruction]]",
-        "Compress; --oob runs fresh autonomous worker rounds",
+        "Compress; --oob runs fresh autonomous worker rounds; duplicates are ignored",
     ],
     decompress: ["/dcp decompress <n>", "Restore selected compression"],
     recompress: ["/dcp recompress <n>", "Re-apply a user-decompressed compression"],

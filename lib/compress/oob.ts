@@ -578,6 +578,7 @@ async function notify(
             sessionID,
             text: text.startsWith(DCP_NOTICE_PREFIX) ? text : `${DCP_NOTICE_PREFIX}${text}`,
             description: "DCP out-of-band compression",
+            resume: false,
         })
     } catch (error: any) {
         logger.warn("Failed to show DCP out-of-band notice", {
@@ -1663,6 +1664,11 @@ export async function runOutOfBandAgent(input: OutOfBandAgentInput): Promise<Out
             ).projectedContextTokens
             const roundId = `oob-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 
+            // Do not set parentID here. OpenCode treats a parentID child as a
+            // task subagent: it wakes the target and injects a <subagent>
+            // report after every completed round, which races these writes and
+            // pollutes the target transcript. Metadata keeps the worker
+            // isolated while still giving it a fresh context.
             const created = await session.create({
                 title: `DCP out-of-band compression (round ${roundNumber})`,
                 ...(childAgent ? { agent: childAgent } : {}),

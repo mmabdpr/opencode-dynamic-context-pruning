@@ -636,6 +636,33 @@ test("command host passes the free-form instruction to the out-of-band agent", a
     assert.equal(output.parts[0].synthetic, true)
 })
 
+test("command host removes the running placeholder when the host rejects an OOB run", async () => {
+    const state = createSessionState()
+    const handler = createCommandExecuteHandler(
+        commandClient([message("m1", "user", 1, "first"), message("m2", "assistant", 2, "second")]),
+        state,
+        logger(),
+        commandConfig("allow"),
+        "/tmp",
+        { global: undefined, agents: {} },
+        {
+            modelLimit: 1,
+            runOutOfBand: async () => undefined,
+        },
+    )
+
+    const output = { parts: [] as any[] }
+    await handler(
+        { command: "dcp-compress", sessionID: "session-oob-rejected", arguments: "--oob" },
+        output,
+    )
+
+    assert.equal(output.parts.length, 1)
+    assert.equal(output.parts[0].ignored, true)
+    assert.equal(output.parts[0].synthetic, true)
+    assert.match(output.parts[0].text, /compression request ignored/)
+})
+
 test("command host keeps the normal prompt when under the limit", async () => {
     const calls = { notified: 0, ran: 0 }
     const state = createSessionState()

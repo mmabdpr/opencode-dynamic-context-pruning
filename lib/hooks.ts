@@ -184,7 +184,7 @@ export interface CommandHost {
         sessionID: string
         instruction: string
         messages: WithParts[]
-    }) => Promise<OutOfBandResult>
+    }) => Promise<OutOfBandResult | undefined>
     /** V2 has no writable session.prompt; send command output as a synthetic message. */
     sendMessage?: (input: {
         sessionID: string
@@ -349,11 +349,22 @@ export function createCommandExecuteHandler(
                         synthetic: true,
                         ignored: true,
                     })
-                    await host.runOutOfBand({
+                    const result = await host.runOutOfBand({
                         sessionID: input.sessionID,
                         instruction,
                         messages,
                     })
+                    if (!result) {
+                        // The host rejected the run (for example a duplicate
+                        // request); do not leave a false "running" placeholder.
+                        output.parts.length = 0
+                        output.parts.push({
+                            type: "text",
+                            text: `${DCP_NOTICE_PREFIX}compression request ignored.`,
+                            synthetic: true,
+                            ignored: true,
+                        })
+                    }
                     return
                 }
 
