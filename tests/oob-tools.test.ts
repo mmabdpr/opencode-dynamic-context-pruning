@@ -454,7 +454,7 @@ test("raw range compression uses the range tool and enforces the write budget", 
 
     assert.equal(harness.legacyCalls.length, 1)
     assert.match(output, /write: 1\/1/)
-    assert.match(output, /status: write budget exhausted/)
+    assert.match(output, /status: round write budget exhausted/)
     assert.equal(run.status, "budget-exhausted")
     assert.equal(run.writes, 1)
     assert.ok(run.reclaimedTokens > 0)
@@ -772,6 +772,81 @@ test("starts a fresh worker round when the previous worker reports CONTINUE", as
     assert.match(prompts[0].text, /at most 4 successful write\(s\)/)
     assert.match(prompts[1].text, /at most 4 successful write\(s\)/)
     assert.equal(harness.runtime.runs.size, 0)
+})
+
+test("continues after a worker exhausts its round write budget even if it reports DONE", async () => {
+    const harness = createHarness({ maxWrites: 8 })
+    const created: string[] = []
+    let nextChild = 0
+
+    const session = {
+        async create() {
+            const id = `child-budget-done-${++nextChild}`
+            created.push(id)
+            return { id }
+        },
+        async prompt(input: any) {
+            if (input.sessionID !== "child-budget-done-1") {
+                return
+            }
+            const childID = input.sessionID
+            await harness.call("dcp_oob_read", { startRef: "@1@", endRef: "@2@" }, childID)
+            await harness.call(
+                "dcp_oob_compress",
+                {
+                    topic: "First budgeted range",
+                    startId: "@1@",
+                    endId: "@2@",
+                    summary: "first budgeted summary",
+                },
+                childID,
+            )
+            await harness.call("dcp_oob_read", { startRef: "@3@" }, childID)
+            await harness.call(
+                "dcp_oob_compress",
+                {
+                    topic: "Second budgeted range",
+                    startId: "@3@",
+                    endId: "@3@",
+                    summary: "second budgeted summary",
+                },
+                childID,
+            )
+        },
+        async wait() {},
+        async context({ sessionID }: any) {
+            return childEntries(
+                sessionID === "child-budget-done-1"
+                    ? "Hit the round budget.\nDCP-OOB: DONE"
+                    : "No more ranges.\nDCP-OOB: DONE",
+            )
+        },
+        async get({ sessionID }: any) {
+            return { id: sessionID, agent: "build", model: { providerID: "provider", id: "model" } }
+        },
+        async synthetic() {},
+        async interrupt() {},
+        async remove() {},
+    }
+
+    const result = await runOutOfBandAgent({
+        session: session as any,
+        host: harness.host,
+        state: harness.target.state,
+        messages: harness.target.messages,
+        sessionID: harness.target.sessionID,
+        directory: "/tmp/project",
+        instruction: "compress as much as possible",
+        roundWriteBudget: 2,
+    })
+
+    assert.equal(result.rounds, 2)
+    assert.equal(result.chunks, 2)
+    assert.equal(result.stopped, "completed")
+    assert.equal(result.budget?.writes, 2)
+    assert.equal(result.budget?.maxWrites, 8)
+    assert.deepEqual(created, ["child-budget-done-1", "child-budget-done-2"])
+    assert.equal(result.report, "No more ranges.\nDCP-OOB: DONE")
 })
 
 test("a worker that requests CONTINUE without net progress stops the loop", async () => {
