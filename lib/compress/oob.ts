@@ -34,7 +34,7 @@ export interface OutOfBandSessionApi {
 
 export type LoadTarget = (
     sessionID: string,
-) => Promise<{ state: SessionState; messages: WithParts[] }>
+) => Promise<{ state: SessionState; messages: WithParts[]; allMessages?: WithParts[] }>
 
 export interface LegacyRangeExecutor {
     execute(args: CompressRangeToolArgs, toolCtx: any): Promise<string>
@@ -939,9 +939,10 @@ async function loadRunTarget(
             "DCP out-of-band tool rejected: the loaded session does not match the bound target.",
         )
     }
-    assignMessageRefs(loaded.state, loaded.messages)
-    syncCompressionBlocks(loaded.state, host.logger, loaded.messages)
-    return loaded
+    const allMessages = loaded.allMessages ?? loaded.messages
+    assignMessageRefs(loaded.state, allMessages)
+    syncCompressionBlocks(loaded.state, host.logger, allMessages)
+    return { state: loaded.state, messages: loaded.messages }
 }
 
 function sliceByTokenBudget(
@@ -1519,7 +1520,9 @@ export async function runOutOfBandAgent(input: OutOfBandAgentInput): Promise<Out
     const roundToolCallBudget = Math.max(1, input.roundToolCallBudget ?? OOB_ROUND_TOOL_CALL_BUDGET)
 
     let previousManualMode = input.state.manualMode
-    let loaded: { state: SessionState; messages: WithParts[] } | undefined
+    let loaded:
+        | { state: SessionState; messages: WithParts[]; allMessages?: WithParts[] }
+        | undefined
     let before = 0
     let after = 0
     let blocks = 0
@@ -1564,8 +1567,9 @@ export async function runOutOfBandAgent(input: OutOfBandAgentInput): Promise<Out
         if (current.state.sessionId !== sessionID) {
             throw new Error("Loaded session does not match the out-of-band target.")
         }
-        assignMessageRefs(current.state, current.messages)
-        syncCompressionBlocks(current.state, logger, current.messages)
+        const allMessages = current.allMessages ?? current.messages
+        assignMessageRefs(current.state, allMessages)
+        syncCompressionBlocks(current.state, logger, allMessages)
         if (current.state.compressPermission !== "allow") {
             throw new Error(
                 'DCP out-of-band compression requires compress permission "allow" for the target session.',
@@ -1583,8 +1587,9 @@ export async function runOutOfBandAgent(input: OutOfBandAgentInput): Promise<Out
             throw new Error("Loaded session does not match the out-of-band target.")
         }
         previousManualMode = loaded.state.manualMode
-        assignMessageRefs(loaded.state, loaded.messages)
-        syncCompressionBlocks(loaded.state, logger, loaded.messages)
+        const allMessages = loaded.allMessages ?? loaded.messages
+        assignMessageRefs(loaded.state, allMessages)
+        syncCompressionBlocks(loaded.state, logger, allMessages)
         if (loaded.state.compressPermission !== "allow") {
             throw new Error(
                 'DCP out-of-band compression requires compress permission "allow" for the target session.',
@@ -1903,8 +1908,9 @@ export async function runOutOfBandAgent(input: OutOfBandAgentInput): Promise<Out
     try {
         const finalTarget = await host.loadTarget(sessionID)
         if (finalTarget.state.sessionId === sessionID) {
-            assignMessageRefs(finalTarget.state, finalTarget.messages)
-            syncCompressionBlocks(finalTarget.state, logger, finalTarget.messages)
+            const allMessages = finalTarget.allMessages ?? finalTarget.messages
+            assignMessageRefs(finalTarget.state, allMessages)
+            syncCompressionBlocks(finalTarget.state, logger, allMessages)
             after = projectContextTokens(
                 finalTarget.state,
                 finalTarget.messages,

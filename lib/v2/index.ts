@@ -27,6 +27,8 @@ import {
     syncCompressionBlocks,
 } from "../messages"
 import { countTokens, getCurrentParams } from "../token-utils"
+import { isMessageCompacted } from "../state/utils"
+import { recentContextMessages } from "../compress/context-window"
 import { matchesGlob } from "../protected-patterns"
 import { history, project } from "./messages"
 import { analyzeContextTokens } from "../commands/context"
@@ -75,6 +77,7 @@ export async function setup(ctx: Plugin.Context) {
     const queues = new Map<string, Promise<unknown>>()
     const limits = new Map<string, number>()
     const oobSessions = new Set<string>()
+    const activeContextIds = new Map<string, Set<string>>()
     const oobRuntime = createOutOfBandRuntime()
 
     async function isOutOfBandSession(sessionID: string): Promise<boolean> {
@@ -239,6 +242,10 @@ export async function setup(ctx: Plugin.Context) {
                 syncToolCache(state, config, logger, view.messages)
                 buildToolIdList(state, view.messages)
                 prune(state, logger, config, view.messages, view.summaryBase)
+                activeContextIds.set(
+                    event.sessionID,
+                    new Set(view.messages.map((message) => message.info.id)),
+                )
                 await injectExtendedSubAgentResults(
                     client,
                     state,
@@ -303,7 +310,15 @@ export async function setup(ctx: Plugin.Context) {
                     loaded.state.modelContextLimit = limit
                 }
             }
-            return { state: loaded.state, messages: loaded.messages }
+            const activeIds = activeContextIds.get(sessionID)
+            const messages = activeIds
+                ? loaded.messages.filter(
+                      (message) =>
+                          activeIds.has(message.info.id) &&
+                          !isMessageCompacted(loaded.state, message),
+                  )
+                : recentContextMessages(loaded.state, loaded.messages)
+            return { state: loaded.state, messages, allMessages: loaded.messages }
         },
         legacyFor: (state: SessionState) =>
             createCompressRangeTool({ client, state, logger, config, prompts }) as any,
