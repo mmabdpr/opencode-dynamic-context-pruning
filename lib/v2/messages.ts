@@ -91,6 +91,18 @@ function output(content: ReadonlyArray<{ type: string; text?: string }>): unknow
 
 export function project(native: Message[], entries: History, session: Session) {
     const byID = new Map(entries.map((entry) => [entry.id, entry]))
+    const nativeIds = new Set(
+        native.map((message) => message.id).filter((id): id is string => typeof id === "string"),
+    )
+    const keepIds = new Set(
+        entries.flatMap((entry) => {
+            const keepID = (entry as any).metadata?.keepID
+            return typeof keepID === "string" ? [keepID] : []
+        }),
+    )
+    const hasAnchoredNative =
+        entries.some((entry) => nativeIds.has(entry.id)) ||
+        [...nativeIds].some((id) => keepIds.has(id))
     // Providers can reuse tool call IDs across turns, so pair each result with the
     // closest preceding call that has the same ID.
     const calls = new Map<string, { part: ContentPart; messageId?: string }>()
@@ -112,7 +124,8 @@ export function project(native: Message[], entries: History, session: Session) {
     for (const message of native) {
         if (!message.id || !["user", "assistant"].includes(message.role)) continue
         const entry = byID.get(message.id)
-        if (!entry || entry.type === "compaction") continue
+        if (entry?.type === "compaction") continue
+        if (!entry && !hasAnchoredNative) continue
         const base = { sessionID: session.id, messageID: message.id }
         const parts: Part[] = []
         if (message.role === "assistant")

@@ -13,6 +13,7 @@ import {
     saveSessionState,
     syncToolCache,
     type SessionState,
+    type WithParts,
 } from "../state"
 import { assignMessageRefs } from "../message-ids"
 import { applyPendingManualTrigger } from "../commands/manual"
@@ -80,6 +81,19 @@ export async function setup(ctx: Plugin.Context) {
     const limits = new Map<string, number>()
     const oobSessions = new Set<string>()
     const activeContextIds = new Map<string, Set<string>>()
+    const fullContext = new Map<string, WithParts[]>()
+    const partialContextWarned = new Set<string>()
+
+    function mergeContextMessages(
+        cached: WithParts[] | undefined,
+        historyMessages: WithParts[],
+    ): WithParts[] {
+        if (!cached?.length) {
+            return historyMessages
+        }
+        const historyIds = new Set(historyMessages.map((message) => message.info.id))
+        return [...cached.filter((message) => !historyIds.has(message.info.id)), ...historyMessages]
+    }
     const oobRuntime = createOutOfBandRuntime()
 
     async function isOutOfBandSession(sessionID: string): Promise<boolean> {
@@ -133,7 +147,9 @@ export async function setup(ctx: Plugin.Context) {
                     ctx.session.context({ sessionID: path.id }),
                     ctx.session.get({ sessionID: path.id }),
                 ])
-                return { data: history(entries, session) }
+                return {
+                    data: mergeContextMessages(fullContext.get(path.id), history(entries, session)),
+                }
             },
             prompt: async (input: {
                 path: { id: string }
@@ -163,7 +179,7 @@ export async function setup(ctx: Plugin.Context) {
             state = createSessionState("compact")
             sessions.set(sessionID, state)
         }
-        const messages = history(entries, session)
+        const messages = mergeContextMessages(fullContext.get(sessionID), history(entries, session))
         await ensureSessionInitialized(
             client,
             state,
@@ -236,11 +252,37 @@ export async function setup(ctx: Plugin.Context) {
                     agent: event.agent,
                     model: event.model,
                 })
+                const entryIds = new Set(entries.map((entry) => entry.id))
+                const missingFromContext = event.messages.filter(
+                    (message) => message.id && !entryIds.has(message.id),
+                ).length
+                if (missingFromContext > 0 && !partialContextWarned.has(event.sessionID)) {
+                    partialContextWarned.add(event.sessionID)
+                    logger.warn("DCP is projecting native messages missing from session.context", {
+                        sessionID: event.sessionID,
+                        missing: missingFromContext,
+                        native: event.messages.length,
+                        context: entries.length,
+                    })
+                }
+                if (kind === "context") {
+                    const tail = view.messages
+                        .filter((message) => !entryIds.has(message.info.id))
+                        .map((message) => structuredClone(message))
+                    if (tail.length > 0) {
+                        fullContext.set(event.sessionID, tail)
+                    } else {
+                        fullContext.delete(event.sessionID)
+                    }
+                }
                 removeDcpNotices(view.messages)
                 stripHallucinations(view.messages, state.idFormat)
                 assignMessageRefs(state, view.messages)
                 // Compaction may select only a prefix; block origins can be in the retained tail.
-                syncCompressionBlocks(state, logger, messages)
+                const syncMessages = new Map<string, WithParts>()
+                for (const message of messages) syncMessages.set(message.info.id, message)
+                for (const message of view.messages) syncMessages.set(message.info.id, message)
+                syncCompressionBlocks(state, logger, [...syncMessages.values()])
                 syncToolCache(state, config, logger, view.messages)
                 buildToolIdList(state, view.messages)
                 prune(state, logger, config, view.messages, view.summaryBase)
@@ -555,6 +597,8 @@ export async function setup(ctx: Plugin.Context) {
     return () => {
         sessions.clear()
         limits.clear()
+        fullContext.clear()
+        partialContextWarned.clear()
         oobRuntime.runs.clear()
         oobSessions.clear()
     }
