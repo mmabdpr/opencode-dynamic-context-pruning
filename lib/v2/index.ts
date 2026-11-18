@@ -44,6 +44,7 @@ import {
     type OutOfBandToolHost,
 } from "../compress/oob"
 import { rpc } from "./rpc"
+import { getPluginIdentity } from "../plugin-identity"
 
 // Extension point for future model-invisible V2 reports. Never use synthetic()
 // here: its text would enter the model's context, unlike V1 ignored messages.
@@ -63,7 +64,7 @@ export async function setup(ctx: Plugin.Context) {
     if (!config.enabled) {
         await ctx.rpc.register(
             { ...rpc, methods: { status: rpc.methods.status } },
-            { status: async () => ({ enabled: false }) },
+            { status: async () => ({ enabled: false, ...getPluginIdentity() }) },
         )
         return
     }
@@ -497,7 +498,7 @@ export async function setup(ctx: Plugin.Context) {
                 })
         })
     await ctx.rpc.register(rpc, {
-        status: async () => ({ enabled: config.commands.enabled }),
+        status: async () => ({ enabled: config.commands.enabled, ...getPluginIdentity() }),
         snapshot: ({ sessionID }) =>
             serial(sessionID, async () => {
                 const { state, messages } = await load(sessionID)

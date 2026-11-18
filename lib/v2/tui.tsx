@@ -65,6 +65,8 @@ export async function setup(ctx: Plugin.Context) {
                         manualMode={data.manualMode}
                         canCompress={data.canCompress}
                         blockedReason={data.blockedReason}
+                        version={status.version}
+                        commit={status.commit}
                         onContext={() => {
                             void open("context")
                         }}

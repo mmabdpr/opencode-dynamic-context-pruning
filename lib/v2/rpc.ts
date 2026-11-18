@@ -36,7 +36,14 @@ const context = z.object({
 export const rpc = {
     id: "dcp",
     methods: {
-        status: { input: z.object({}), output: z.object({ enabled: z.boolean() }) },
+        status: {
+            input: z.object({}),
+            output: z.object({
+                enabled: z.boolean(),
+                version: z.string(),
+                commit: z.string(),
+            }),
+        },
         snapshot: {
             input: session,
             output: z.object({

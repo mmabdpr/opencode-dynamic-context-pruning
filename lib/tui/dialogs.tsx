@@ -170,6 +170,8 @@ export function PanelDialog(props: {
     manualMode: boolean
     canCompress: boolean
     blockedReason?: string
+    version?: string
+    commit?: string
     onContext: () => void
     onStats: () => void
     onManual: (enabled: boolean) => void
@@ -178,6 +180,20 @@ export function PanelDialog(props: {
     const canCompress = props.canCompress
     return (
         <DcpFrame api={props.api} eyebrow="DCP">
+            <Card theme={theme} title="Plugin">
+                <StatusPill
+                    theme={theme}
+                    label="Version"
+                    value={props.version ?? "unknown"}
+                    accent="primary"
+                />
+                <StatusPill
+                    theme={theme}
+                    label="Commit"
+                    value={props.commit ?? "unknown"}
+                    accent="textMuted"
+                />
+            </Card>
             <Card theme={theme} title="Views">
                 <box flexDirection="column" gap={1}>
                     <ActionRow
