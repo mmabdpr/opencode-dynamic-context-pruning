@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { recentContextMessages } from "../lib/compress/context-window"
+import { recentContextMessages, scopeCompressionMessages } from "../lib/compress/context-window"
 import { createSessionState, type WithParts } from "../lib/state"
 
 function message(
@@ -48,4 +48,25 @@ test("recentContextMessages excludes messages outside the last reported context 
     assert.ok(ids.includes("latest-assistant"))
     assert.ok(ids.includes("recent-user"))
     assert.equal(ids.includes("old-user"), false)
+})
+
+test("scopeCompressionMessages keeps only the model-visible message IDs", () => {
+    const state = createSessionState("compact")
+    const messages = [
+        message("archived-user", "user", 1, "archived"),
+        message("archived-assistant", "assistant", 2, "archived reply"),
+        message("active-user", "user", 3, "active"),
+        message("active-assistant", "assistant", 4, "active reply"),
+    ]
+
+    const scoped = scopeCompressionMessages(
+        state,
+        messages,
+        new Set(["active-user", "active-assistant"]),
+    )
+
+    assert.deepEqual(
+        scoped.map((item) => item.info.id),
+        ["active-user", "active-assistant"],
+    )
 })

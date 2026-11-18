@@ -8,6 +8,7 @@ import { getCurrentParams, getCurrentTokenUsage } from "../token-utils"
 import { sendCompressNotification } from "../ui/notification"
 import type { ToolContext } from "./types"
 import { buildSearchContext, fetchSessionMessages } from "./search"
+import { scopeCompressionMessages } from "./context-window"
 import type { SearchContext } from "./types"
 import { applyPendingCompressionDurations } from "./timing"
 
@@ -72,9 +73,11 @@ export async function prepareSession(
     deduplicate(ctx.state, ctx.logger, ctx.config, rawMessages)
     purgeErrors(ctx.state, ctx.logger, ctx.config, rawMessages)
 
+    const scopedMessages = scopeCompressionMessages(ctx.state, rawMessages, ctx.activeMessageIds)
+
     return {
         rawMessages,
-        searchContext: buildSearchContext(ctx.state, rawMessages),
+        searchContext: buildSearchContext(ctx.state, scopedMessages),
     }
 }
 

@@ -9,6 +9,8 @@ export interface ToolContext {
     logger: Logger
     config: PluginConfig
     prompts: PromptStore
+    /** Message IDs currently visible to the model; omit to use the recent-context fallback. */
+    activeMessageIds?: Set<string>
 }
 
 export interface CompressRangeEntry {

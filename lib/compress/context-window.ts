@@ -8,6 +8,24 @@ import { countAllMessageTokens } from "../token-utils"
  * context. OOB compression must not spend writes on archived messages that
  * are no longer sent to the model.
  */
+/**
+ * Restrict compression candidates to messages the target model can currently
+ * see. Older messages are already outside the active prompt; compressing them
+ * does not reduce the live context.
+ */
+export function scopeCompressionMessages(
+    state: SessionState,
+    messages: WithParts[],
+    activeMessageIds?: Set<string>,
+): WithParts[] {
+    if (!activeMessageIds) {
+        return recentContextMessages(state, messages)
+    }
+    return messages.filter(
+        (message) => activeMessageIds.has(message.info.id) && !isMessageCompacted(state, message),
+    )
+}
+
 export function recentContextMessages(state: SessionState, messages: WithParts[]): WithParts[] {
     const breakdown = analyzeContextTokens(state, messages)
     const budget = breakdown.total > 0 ? breakdown.total : (state.modelContextLimit ?? 0)

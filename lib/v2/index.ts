@@ -296,6 +296,7 @@ export async function setup(ctx: Plugin.Context) {
             logger,
             config,
             prompts,
+            activeMessageIds: state.sessionId ? activeContextIds.get(state.sessionId) : undefined,
         })
     const oobHost: OutOfBandToolHost = {
         config,
@@ -321,7 +322,16 @@ export async function setup(ctx: Plugin.Context) {
             return { state: loaded.state, messages, allMessages: loaded.messages }
         },
         legacyFor: (state: SessionState) =>
-            createCompressRangeTool({ client, state, logger, config, prompts }) as any,
+            createCompressRangeTool({
+                client,
+                state,
+                logger,
+                config,
+                prompts,
+                activeMessageIds: state.sessionId
+                    ? activeContextIds.get(state.sessionId)
+                    : undefined,
+            }) as any,
     }
     const oobToolDefinitions = createOutOfBandTools(oobHost)
 
