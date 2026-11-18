@@ -185,6 +185,12 @@ export interface CommandHost {
         instruction: string
         messages: WithParts[]
     }) => Promise<OutOfBandResult>
+    /** V2 has no writable session.prompt; send command output as a synthetic message. */
+    sendMessage?: (input: {
+        sessionID: string
+        text: string
+        description?: string
+    }) => Promise<void>
 }
 
 export function createCommandExecuteHandler(
@@ -231,8 +237,31 @@ export function createCommandExecuteHandler(
             const subcommand = isCompressCommand ? "compress" : args[0]?.toLowerCase() || ""
             const subArgs = isCompressCommand ? args : args.slice(1)
 
+            const displayClient = host?.sendMessage
+                ? {
+                      ...client,
+                      session: {
+                          ...(client.session ?? {}),
+                          prompt: async (promptInput: any) => {
+                              const text = (promptInput?.body?.parts ?? [])
+                                  .map((part: any) => part?.text ?? "")
+                                  .join("\n")
+                              if (!text) return
+                              await host.sendMessage!({
+                                  sessionID:
+                                      promptInput?.path?.id ??
+                                      promptInput?.path?.sessionID ??
+                                      input.sessionID,
+                                  text,
+                                  description: "DCP command output",
+                              })
+                          },
+                      },
+                  }
+                : client
+
             const commandCtx = {
-                client,
+                client: displayClient,
                 state,
                 config,
                 logger,

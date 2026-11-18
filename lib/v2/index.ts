@@ -36,6 +36,7 @@ import { buildStatsReport } from "../commands/stats"
 import {
     createOutOfBandRuntime,
     createOutOfBandTools,
+    DCP_NOTICE_PREFIX,
     isolateOutOfBandTools,
     notifyOverLimit as notifyOutOfBandOverLimit,
     removeDcpNotices,
@@ -447,6 +448,13 @@ export async function setup(ctx: Plugin.Context) {
                                             live,
                                             limit,
                                             mode,
+                                        })
+                                    },
+                                    sendMessage: async ({ sessionID, text }) => {
+                                        await ctx.session.synthetic({
+                                            sessionID,
+                                            text: `${DCP_NOTICE_PREFIX}\n${text}`,
+                                            description: "DCP command output",
                                         })
                                     },
                                     runOutOfBand: async ({ sessionID, instruction, messages }) =>

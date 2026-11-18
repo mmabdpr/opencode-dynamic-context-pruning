@@ -475,6 +475,34 @@ test("rejects replacing a block whose summary changed after it was read", async 
     )
 })
 
+test("command host sends context output through the V2 synthetic channel", async () => {
+    const sent: Array<{ sessionID: string; text: string }> = []
+    const state = createSessionState()
+    state.sessionId = "session-context"
+    state.systemPromptTokens = 14_000
+    const handler = createCommandExecuteHandler(
+        commandClient([message("m1", "user", 1, "first"), message("m2", "assistant", 2, "second")]),
+        state,
+        logger(),
+        commandConfig("off"),
+        "/tmp",
+        { global: undefined, agents: {} },
+        {
+            sendMessage: async ({ sessionID, text }) => {
+                sent.push({ sessionID, text })
+            },
+        },
+    )
+
+    const output = { parts: [] as any[] }
+    await handler({ command: "dcp", sessionID: "session-context", arguments: "context" }, output)
+
+    assert.equal(sent.length, 1)
+    assert.equal(sent[0]?.sessionID, "session-context")
+    assert.match(sent[0]?.text ?? "", /DCP Context Analysis/)
+    assert.match(sent[0]?.text ?? "", /Live Context Breakdown/)
+})
+
 test("command host refuses out-of-band when compress permission is ask", async () => {
     const calls = { ran: 0 }
     const cfg = commandConfig("allow")
