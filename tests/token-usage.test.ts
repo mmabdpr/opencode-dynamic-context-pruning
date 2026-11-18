@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import type { PluginConfig } from "../lib/config"
 import { analyzeContextTokens } from "../lib/commands/context"
+import { cacheSystemPromptTokens } from "../lib/ui/utils"
 import { isContextOverLimits } from "../lib/messages/inject/utils"
 import { wrapCompressedSummary } from "../lib/compress/state"
 import { createSessionState, type WithParts } from "../lib/state"
@@ -387,4 +388,280 @@ test("analyzeContextTokens subtracts a compacted first user from the system esti
 
     assert.equal(breakdown.system, 5000 - countTokens(firstUserText))
     assert.equal(breakdown.user, countTokens("next"))
+})
+
+test("uses measured system tokens instead of a historical first-active assistant", () => {
+    const state = createSessionState()
+    state.systemPromptTokens = 14_000
+    state.lastCompaction = 100
+
+    const messages: WithParts[] = [
+        {
+            info: {
+                id: "msg-summary",
+                role: "assistant",
+                sessionID: "ses_system_metric",
+                agent: "assistant",
+                summary: true,
+                finish: "stop",
+                time: { created: 100 },
+                tokens: {
+                    input: 400_000,
+                    output: 200,
+                    reasoning: 0,
+                    cache: { read: 0, write: 0 },
+                },
+            } as WithParts["info"],
+            parts: [],
+        },
+        {
+            info: {
+                id: "msg-next-user",
+                role: "user",
+                sessionID: "ses_system_metric",
+                agent: "assistant",
+                time: { created: 150 },
+            } as WithParts["info"],
+            parts: [textPart("msg-next-user", "ses_system_metric", "next-user", "next request")],
+        },
+        {
+            info: {
+                id: "msg-current-assistant",
+                role: "assistant",
+                sessionID: "ses_system_metric",
+                agent: "assistant",
+                time: { created: 200 },
+                tokens: {
+                    input: 407_000,
+                    output: 100,
+                    reasoning: 0,
+                    cache: { read: 0, write: 0 },
+                },
+            } as WithParts["info"],
+            parts: [textPart("msg-current-assistant", "ses_system_metric", "current", "done")],
+        },
+    ]
+
+    const breakdown = analyzeContextTokens(state, messages)
+
+    assert.equal(breakdown.system, 14_000)
+    assert.equal(breakdown.systemKnown, true)
+    assert.equal(breakdown.reportedTotal, 407_100)
+    assert.equal(breakdown.total, breakdown.reportedTotal)
+    assert.ok(breakdown.liveTotal < 20_000)
+})
+
+test("reports an unknown system baseline after compaction without a measurement", () => {
+    const state = createSessionState()
+    state.lastCompaction = 100
+
+    const messages: WithParts[] = [
+        {
+            info: {
+                id: "msg-summary",
+                role: "assistant",
+                sessionID: "ses_system_unknown",
+                agent: "assistant",
+                summary: true,
+                finish: "stop",
+                time: { created: 100 },
+                tokens: {
+                    input: 400_000,
+                    output: 200,
+                    reasoning: 0,
+                    cache: { read: 0, write: 0 },
+                },
+            } as WithParts["info"],
+            parts: [],
+        },
+        {
+            info: {
+                id: "msg-user",
+                role: "user",
+                sessionID: "ses_system_unknown",
+                agent: "assistant",
+                time: { created: 150 },
+            } as WithParts["info"],
+            parts: [textPart("msg-user", "ses_system_unknown", "user", "next")],
+        },
+        {
+            info: {
+                id: "msg-assistant",
+                role: "assistant",
+                sessionID: "ses_system_unknown",
+                agent: "assistant",
+                time: { created: 200 },
+                tokens: {
+                    input: 407_000,
+                    output: 100,
+                    reasoning: 0,
+                    cache: { read: 0, write: 0 },
+                },
+            } as WithParts["info"],
+            parts: [textPart("msg-assistant", "ses_system_unknown", "assistant", "done")],
+        },
+    ]
+
+    const breakdown = analyzeContextTokens(state, messages)
+
+    assert.equal(breakdown.system, 0)
+    assert.equal(breakdown.systemKnown, false)
+    assert.ok(breakdown.liveTotal < 20_000)
+})
+
+test("counts active compression summaries exactly once", () => {
+    const state = createSessionState()
+    state.systemPromptTokens = 14_000
+
+    const block = createActiveBlock(7, wrapCompressedSummary(7, "compressed history"), 1_000)
+    state.prune.messages.blocksById.set(7, block)
+    state.prune.messages.activeBlockIds.add(7)
+    state.prune.messages.byMessageId.set("old-user", {
+        tokenCount: 0,
+        allBlockIds: [7],
+        activeBlockIds: [7],
+    })
+
+    const messages: WithParts[] = [
+        {
+            info: {
+                id: "old-user",
+                role: "user",
+                sessionID: "ses_summary_metric",
+                agent: "assistant",
+                time: { created: 1 },
+            } as WithParts["info"],
+            parts: [textPart("old-user", "ses_summary_metric", "old", "old text")],
+        },
+        {
+            info: {
+                id: "visible-assistant",
+                role: "assistant",
+                sessionID: "ses_summary_metric",
+                agent: "assistant",
+                time: { created: 2 },
+                tokens: {
+                    input: 5_000,
+                    output: 100,
+                    reasoning: 0,
+                    cache: { read: 0, write: 0 },
+                },
+            } as WithParts["info"],
+            parts: [textPart("visible-assistant", "ses_summary_metric", "reply", "reply")],
+        },
+    ]
+
+    const breakdown = analyzeContextTokens(state, messages)
+
+    assert.equal(breakdown.summaries, 1_000)
+    assert.equal(breakdown.user, 0)
+    assert.equal(
+        breakdown.liveTotal,
+        breakdown.system +
+            breakdown.user +
+            breakdown.assistant +
+            breakdown.tools +
+            breakdown.summaries,
+    )
+})
+
+test("does not double count an injected DCP summary", () => {
+    const state = createSessionState()
+    state.systemPromptTokens = 14_000
+
+    const block = createActiveBlock(7, wrapCompressedSummary(7, "stored summary"), 9_999)
+    state.prune.messages.blocksById.set(7, block)
+    state.prune.messages.activeBlockIds.add(7)
+
+    const messages: WithParts[] = [
+        {
+            info: {
+                id: "msg_dcp_summary_injected",
+                role: "user",
+                sessionID: "ses_summary_injected",
+                agent: "assistant",
+                time: { created: 1 },
+            } as WithParts["info"],
+            parts: [
+                textPart(
+                    "msg_dcp_summary_injected",
+                    "ses_summary_injected",
+                    "injected",
+                    "injected summary",
+                ),
+            ],
+        },
+        {
+            info: {
+                id: "msg-visible-user",
+                role: "user",
+                sessionID: "ses_summary_injected",
+                agent: "assistant",
+                time: { created: 2 },
+            } as WithParts["info"],
+            parts: [textPart("msg-visible-user", "ses_summary_injected", "hello", "hello")],
+        },
+        {
+            info: {
+                id: "msg-visible-assistant",
+                role: "assistant",
+                sessionID: "ses_summary_injected",
+                agent: "assistant",
+                time: { created: 3 },
+                tokens: {
+                    input: 5_000,
+                    output: 100,
+                    reasoning: 0,
+                    cache: { read: 0, write: 0 },
+                },
+            } as WithParts["info"],
+            parts: [textPart("msg-visible-assistant", "ses_summary_injected", "world", "world")],
+        },
+    ]
+
+    const breakdown = analyzeContextTokens(state, messages)
+
+    assert.equal(breakdown.summaries, countTokens("injected summary"))
+    assert.equal(breakdown.user, countTokens("hello"))
+})
+
+test("cacheSystemPromptTokens preserves an authoritative value and ignores invalid history", () => {
+    const messages: WithParts[] = [
+        {
+            info: {
+                id: "msg-user",
+                role: "user",
+                sessionID: "ses_cache_system",
+                agent: "assistant",
+                time: { created: 1 },
+            } as WithParts["info"],
+            parts: [textPart("msg-user", "ses_cache_system", "first", "hello")],
+        },
+        {
+            info: {
+                id: "msg-assistant",
+                role: "assistant",
+                sessionID: "ses_cache_system",
+                agent: "assistant",
+                time: { created: 2 },
+                tokens: {
+                    input: 5_000,
+                    output: 100,
+                    reasoning: 0,
+                    cache: { read: 0, write: 0 },
+                },
+            } as WithParts["info"],
+            parts: [textPart("msg-assistant", "ses_cache_system", "reply", "world")],
+        },
+    ]
+
+    const measured = createSessionState()
+    measured.systemPromptTokens = 14_000
+    cacheSystemPromptTokens(measured, messages)
+    assert.equal(measured.systemPromptTokens, 14_000)
+
+    const compacted = createSessionState()
+    compacted.lastCompaction = 1
+    cacheSystemPromptTokens(compacted, messages)
+    assert.equal(compacted.systemPromptTokens, undefined)
 })

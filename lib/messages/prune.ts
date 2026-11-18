@@ -7,10 +7,11 @@ import { getLastUserMessage } from "./query"
 import type { UserMessage } from "@opencode-ai/sdk/v2"
 import { formatBlockRef } from "../message-ids"
 
-const PRUNED_TOOL_OUTPUT_REPLACEMENT =
+export const PRUNED_TOOL_OUTPUT_REPLACEMENT =
     "[Output removed to save context - information superseded or no longer needed]"
-const PRUNED_TOOL_ERROR_INPUT_REPLACEMENT = "[input removed due to failed tool call]"
-const PRUNED_QUESTION_INPUT_REPLACEMENT = "[questions removed - see output for user's answers]"
+export const PRUNED_TOOL_ERROR_INPUT_REPLACEMENT = "[input removed due to failed tool call]"
+export const PRUNED_QUESTION_INPUT_REPLACEMENT =
+    "[questions removed - see output for user's answers]"
 
 export const prune = (
     state: SessionState,

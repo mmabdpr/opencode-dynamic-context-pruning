@@ -243,14 +243,15 @@ function contextProjection(
     reclaimedTokens: number,
 ): ContextProjection {
     const breakdown = analyzeContextTokens(state, messages)
-    const liveFloor = breakdown.system + breakdown.user + breakdown.tools
-    const live = Math.max(breakdown.total, liveFloor)
+    // A reported total that predates the newest active block describes content
+    // that is no longer in the prompt. Do not let it hide real progress; when
+    // it is fresh, keep it as a conservative floor and apply reclaimed tokens.
+    const reportedFloor = breakdown.reportedFresh
+        ? Math.max(0, breakdown.reportedTotal - Math.max(0, reclaimedTokens))
+        : 0
     return {
-        reportedContextTokens: breakdown.total,
-        projectedContextTokens: Math.max(
-            live,
-            Math.max(0, breakdown.total - Math.max(0, reclaimedTokens)),
-        ),
+        reportedContextTokens: breakdown.reportedTotal,
+        projectedContextTokens: Math.max(breakdown.liveTotal, reportedFloor),
     }
 }
 

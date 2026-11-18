@@ -28,7 +28,7 @@ export function ContextDialog(props: {
 }) {
     const theme = props.api.theme.current
     const breakdown = props.breakdown
-    const total = Math.max(0, breakdown.total)
+    const total = Math.max(0, breakdown.liveTotal)
     const activePruned = breakdown.prunedToolCount + breakdown.prunedMessageCount
 
     return (
@@ -36,9 +36,15 @@ export function ContextDialog(props: {
             <Card theme={theme} title="Current">
                 <Metric
                     theme={theme}
-                    label="Total in context"
+                    label="Live context estimate"
                     value={`~${formatTokenCount(total)}`}
                     hint="tokens"
+                />
+                <Metric
+                    theme={theme}
+                    label="Last API report"
+                    value={`~${formatTokenCount(breakdown.reportedTotal)}`}
+                    hint={breakdown.reportedFresh ? "tokens" : "stale tokens"}
                 />
                 <Metric
                     theme={theme}
@@ -56,7 +62,7 @@ export function ContextDialog(props: {
             <Card theme={theme} title="Breakdown">
                 <Progress
                     theme={theme}
-                    label="System"
+                    label={breakdown.systemKnown ? "System" : "System (unknown)"}
                     value={breakdown.system}
                     total={total}
                     color="primary"
@@ -86,6 +92,16 @@ export function ContextDialog(props: {
                     color="primary"
                     detail={`~${formatTokenCount(breakdown.tools)} tokens`}
                 />
+                {breakdown.summaries > 0 && (
+                    <Progress
+                        theme={theme}
+                        label="Summaries"
+                        value={breakdown.summaries}
+                        total={total}
+                        color="primary"
+                        detail={`~${formatTokenCount(breakdown.summaries)} tokens`}
+                    />
+                )}
             </Card>
         </DcpFrame>
     )

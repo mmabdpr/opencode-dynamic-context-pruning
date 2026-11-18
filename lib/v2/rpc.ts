@@ -20,12 +20,17 @@ const context = z.object({
     user: z.number(),
     assistant: z.number(),
     tools: z.number(),
+    summaries: z.number(),
     toolCount: z.number(),
     toolsInContextCount: z.number(),
     prunedTokens: z.number(),
     prunedToolCount: z.number(),
     prunedMessageCount: z.number(),
     total: z.number(),
+    reportedTotal: z.number(),
+    liveTotal: z.number(),
+    systemKnown: z.boolean(),
+    reportedFresh: z.boolean(),
 })
 
 export const rpc = {

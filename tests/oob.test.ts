@@ -11,6 +11,7 @@ import {
     liveContextTokens,
     OOB_DEFAULT_INSTRUCTION,
     parseOutOfBandFlag,
+    projectContextTokens,
     PROTECTED_CONTENT_HEADINGS,
     removeDcpNotices,
     resolveOutOfBandDecision,
@@ -653,4 +654,53 @@ test("live context tokens stays consistent with the context breakdown", () => {
     state.sessionId = null
     const messages = [message("m1", "user", 1, "hello"), message("m2", "assistant", 2, "world")]
     assert.ok(liveContextTokens(state, messages) >= 5000)
+})
+
+test("OOB projection trusts a stale reported total only as a fresh bound", () => {
+    const build = (blockCreatedAt: number) => {
+        const state = createSessionState()
+        state.systemPromptTokens = 14_000
+        const assistant = message("assistant", "assistant", 2, "done")
+        assistant.info.tokens = {
+            input: 407_000,
+            output: 100,
+            reasoning: 0,
+            cache: { read: 0, write: 0 },
+        }
+        const messages = [message("user", "user", 1, "next request"), assistant]
+        state.prune.messages.blocksById.set(1, {
+            blockId: 1,
+            runId: 1,
+            active: true,
+            deactivatedByUser: false,
+            compressedTokens: 10_000,
+            summaryTokens: 1_000,
+            durationMs: 1,
+            topic: "summary",
+            startId: "@1@",
+            endId: "@1@",
+            anchorMessageId: "user",
+            compressMessageId: "assistant",
+            includedBlockIds: [],
+            consumedBlockIds: [],
+            parentBlockIds: [],
+            directMessageIds: ["user"],
+            directToolIds: [],
+            effectiveMessageIds: ["user"],
+            effectiveToolIds: [],
+            createdAt: blockCreatedAt,
+            summary: "summary",
+        } as any)
+        state.prune.messages.activeBlockIds.add(1)
+        return { state, messages }
+    }
+
+    const stale = build(3)
+    const staleProjection = projectContextTokens(stale.state, stale.messages, 0)
+    assert.equal(staleProjection.reportedContextTokens, 407_100)
+    assert.ok(staleProjection.projectedContextTokens < 20_000)
+
+    const fresh = build(1)
+    const freshProjection = projectContextTokens(fresh.state, fresh.messages, 10_000)
+    assert.equal(freshProjection.projectedContextTokens, 407_100 - 10_000)
 })
