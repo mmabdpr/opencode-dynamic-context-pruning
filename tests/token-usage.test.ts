@@ -7,7 +7,7 @@ import { isContextOverLimits } from "../lib/messages/inject/utils"
 import { wrapCompressedSummary } from "../lib/compress/state"
 import { createSessionState, type WithParts } from "../lib/state"
 import type { CompressionBlock } from "../lib/state"
-import { countTokens, getCurrentTokenUsage } from "../lib/token-utils"
+import { countTokens, getCurrentParams, getCurrentTokenUsage } from "../lib/token-utils"
 
 function buildConfig(maxContextLimit: number, minContextLimit = 1): PluginConfig {
     return {
@@ -664,4 +664,29 @@ test("cacheSystemPromptTokens preserves an authoritative value and ignores inval
     compacted.lastCompaction = 1
     cacheSystemPromptTokens(compacted, messages)
     assert.equal(compacted.systemPromptTokens, undefined)
+})
+
+test("getCurrentParams tolerates user messages without model metadata", () => {
+    const messages = [
+        {
+            info: {
+                id: "user-without-model",
+                role: "user",
+                sessionID: "ses_missing_model",
+                time: { created: 1 },
+            },
+            parts: [textPart("user-without-model", "ses_missing_model", "text", "hello")],
+        },
+    ] as WithParts[]
+
+    const params = getCurrentParams(createSessionState(), messages, {
+        debug() {},
+    } as any)
+
+    assert.deepEqual(params, {
+        providerId: undefined,
+        modelId: undefined,
+        agent: undefined,
+        variant: undefined,
+    })
 })

@@ -68,10 +68,10 @@ export function getCurrentParams(
         }
     }
     const userInfo = userMsg.info as UserMessage
-    const agent: string = userInfo.agent
-    const providerId: string | undefined = userInfo.model.providerID
-    const modelId: string | undefined = userInfo.model.modelID
-    const variant: string | undefined = userInfo.model.variant
+    const agent: string | undefined = userInfo.agent
+    const providerId: string | undefined = userInfo.model?.providerID
+    const modelId: string | undefined = userInfo.model?.modelID
+    const variant: string | undefined = userInfo.model?.variant
 
     return { providerId, modelId, agent, variant }
 }

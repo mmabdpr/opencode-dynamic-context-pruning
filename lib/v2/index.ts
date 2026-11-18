@@ -415,85 +415,116 @@ export async function setup(ctx: Plugin.Context) {
                     name,
                     description: name === "dcp" ? "DCP commands" : "Trigger DCP manual compression",
                     execute: async (invocation) => {
-                        const prompt = await serial(invocation.sessionID, async () => {
-                            const { state, messages } = await load(invocation.sessionID)
-                            const params = getCurrentParams(state, messages, logger)
-                            if (params.providerId && params.modelId) {
-                                const limit = limits.get(`${params.providerId}/${params.modelId}`)
-                                if (limit) {
-                                    state.modelContextLimit = limit
+                        try {
+                            const prompt = await serial(invocation.sessionID, async () => {
+                                const { state, messages } = await load(invocation.sessionID)
+                                const params = getCurrentParams(state, messages, logger)
+                                if (params.providerId && params.modelId) {
+                                    const limit = limits.get(
+                                        `${params.providerId}/${params.modelId}`,
+                                    )
+                                    if (limit) {
+                                        state.modelContextLimit = limit
+                                    }
                                 }
-                            }
-                            const permission =
-                                state.compressPermission ?? config.compress.permission
-                            if (
-                                name === "dcp-compress" ||
-                                invocation.prompt.text.trim().split(/\s+/)[0] === "compress"
-                            )
-                                allowed(state)
-                            const output = { parts: [] }
-                            await createCommandExecuteHandler(
-                                client,
-                                state,
-                                logger,
-                                config,
-                                ctx.location.directory,
-                                { global: { compress: permission }, agents: {} },
-                                {
-                                    modelLimit: state.modelContextLimit,
-                                    notifyOverLimit: async ({ sessionID, live, limit, mode }) => {
-                                        await notifyOutOfBandOverLimit({
-                                            session: ctx.session as any,
+                                const permission =
+                                    state.compressPermission ?? config.compress.permission
+                                if (
+                                    name === "dcp-compress" ||
+                                    invocation.prompt.text.trim().split(/\s+/)[0] === "compress"
+                                )
+                                    allowed(state)
+                                const output = { parts: [] }
+                                await createCommandExecuteHandler(
+                                    client,
+                                    state,
+                                    logger,
+                                    config,
+                                    ctx.location.directory,
+                                    { global: { compress: permission }, agents: {} },
+                                    {
+                                        modelLimit: state.modelContextLimit,
+                                        notifyOverLimit: async ({
                                             sessionID,
-                                            logger,
                                             live,
                                             limit,
                                             mode,
-                                        })
-                                    },
-                                    sendMessage: async ({ sessionID, text }) => {
-                                        await ctx.session.synthetic({
+                                        }) => {
+                                            await notifyOutOfBandOverLimit({
+                                                session: ctx.session as any,
+                                                sessionID,
+                                                logger,
+                                                live,
+                                                limit,
+                                                mode,
+                                            })
+                                        },
+                                        sendMessage: async ({ sessionID, text }) => {
+                                            await ctx.session.synthetic({
+                                                sessionID,
+                                                text: `${DCP_NOTICE_PREFIX}\n${text}`,
+                                                description: "DCP command output",
+                                            })
+                                        },
+                                        runOutOfBand: async ({
                                             sessionID,
-                                            text: `${DCP_NOTICE_PREFIX}\n${text}`,
-                                            description: "DCP command output",
-                                        })
-                                    },
-                                    runOutOfBand: async ({ sessionID, instruction, messages }) =>
-                                        runOutOfBandAgent({
-                                            session: ctx.session as any,
-                                            host: oobHost,
-                                            state,
-                                            messages,
-                                            sessionID,
-                                            directory: ctx.location.directory,
                                             instruction,
-                                            onChildSessionCreated: (childSessionID) =>
-                                                oobSessions.add(childSessionID),
-                                            onChildSessionRemoved: (childSessionID) =>
-                                                oobSessions.delete(childSessionID),
-                                        }),
-                                },
-                            )(
-                                {
-                                    command: name,
-                                    sessionID: invocation.sessionID,
-                                    arguments: invocation.prompt.text,
-                                },
-                                output,
-                            )
-                            state.compressPermission = permission
-                            const pending = state.pendingManualTrigger
-                            if (!pending) return
-                            allowed(state)
-                            state.pendingManualTrigger = null
-                            return pending.prompt
-                        })
-                        if (prompt)
-                            await ctx.session.prompt({
-                                sessionID: invocation.sessionID,
-                                text: prompt,
-                                delivery: invocation.delivery,
+                                            messages,
+                                        }) =>
+                                            runOutOfBandAgent({
+                                                session: ctx.session as any,
+                                                host: oobHost,
+                                                state,
+                                                messages,
+                                                sessionID,
+                                                directory: ctx.location.directory,
+                                                instruction,
+                                                onChildSessionCreated: (childSessionID) =>
+                                                    oobSessions.add(childSessionID),
+                                                onChildSessionRemoved: (childSessionID) =>
+                                                    oobSessions.delete(childSessionID),
+                                            }),
+                                    },
+                                )(
+                                    {
+                                        command: name,
+                                        sessionID: invocation.sessionID,
+                                        arguments: invocation.prompt.text,
+                                    },
+                                    output,
+                                )
+                                state.compressPermission = permission
+                                const pending = state.pendingManualTrigger
+                                if (!pending) return
+                                allowed(state)
+                                state.pendingManualTrigger = null
+                                return pending.prompt
                             })
+                            if (prompt)
+                                await ctx.session.prompt({
+                                    sessionID: invocation.sessionID,
+                                    text: prompt,
+                                    delivery: invocation.delivery,
+                                })
+                        } catch (error: any) {
+                            const message = error?.message ?? String(error)
+                            logger.error("DCP command failed", {
+                                command: name,
+                                sessionID: invocation.sessionID,
+                                error: message,
+                            })
+                            try {
+                                await ctx.session.synthetic({
+                                    sessionID: invocation.sessionID,
+                                    text: `DCP internal notice: DCP command failed: ${message}`,
+                                    description: "DCP command error",
+                                })
+                            } catch (sendError: any) {
+                                logger.error("Failed to report DCP command error", {
+                                    error: sendError?.message ?? String(sendError),
+                                })
+                            }
+                        }
                     },
                 })
         })
