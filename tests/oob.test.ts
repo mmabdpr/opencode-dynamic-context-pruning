@@ -168,7 +168,7 @@ test("resolves the out-of-band decision for each mode", () => {
     )
     assert.equal(
         resolveOutOfBandDecision({ requested: false, mode: "off", overLimit: true }),
-        "notify",
+        "normal",
     )
     assert.equal(
         resolveOutOfBandDecision({ requested: false, mode: "allow", overLimit: false }),

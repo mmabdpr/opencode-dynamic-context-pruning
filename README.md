@@ -166,8 +166,8 @@ Each level overrides the previous, so project settings take priority over global
         // "ask" (default) warns when the live context exceeds the model limit
         // and suggests `/dcp-compress --oob`; "allow" runs it automatically;
         // "always" uses out-of-band compression for every compress command;
-        // "off" disables automatic out-of-band compression and blocks an
-        // over-limit compress unless `--oob` is passed explicitly.
+        // "off" keeps the original in-session compression behavior, even when
+        // over the model limit; `--oob` still forces an out-of-band run.
         // The child agent follows your instruction; the plugin does not parse
         // free-form text into a hard-coded target ratio.
         "outOfBand": "ask",

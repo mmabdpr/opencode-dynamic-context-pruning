@@ -224,7 +224,7 @@ export function resolveOutOfBandDecision(input: {
     if (input.overLimit && input.mode === "allow") {
         return "run"
     }
-    if (input.overLimit && (input.mode === "ask" || input.mode === "off")) {
+    if (input.overLimit && input.mode === "ask") {
         return "notify"
     }
     return "normal"
